@@ -2,7 +2,7 @@
 
 ## 이 저장소
 
-`member-service`다. 회원 관리와 인증(JWT 발급)을 담당한다. 기본 패키지는 `com.example.member`, 포트는 8081, DB는 `member_db`다.
+`member-service`다. 회원 관리와 인증(JWT 발급)을 담당한다. 기본 패키지는 `com.example.member`, 포트는 8081, DB는 `sp_member`다.
 
 ## 정본 문서
 
@@ -59,7 +59,7 @@ git clone https://github.com/yuno110/sp-docs.git ../sp-docs
 
 ## 이 서비스의 경계
 
-- **`board_db`를 조회하지 않는다.** board-service를 호출하지 않는다. 호출 방향은 board → member 단방향이다
+- **`sp_board`를 조회하지 않는다.** board-service를 호출하지 않는다. 호출 방향은 board → member 단방향이다
 - `auth` 패키지와 `member` 패키지를 나눈다. **의존 방향은 `auth → member` 단방향**이며 `member`는 `auth`를 참조하지 않는다
 - JWT **발급(서명)** 담당이다. RSA 개인키를 갖는다
 - JWT 처리는 Spring Security 표준(`NimbusJwtEncoder`)을 쓴다. **필터·Provider를 직접 만들지 않는다**

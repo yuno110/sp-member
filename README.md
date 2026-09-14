@@ -7,7 +7,7 @@
 | 항목 | 값 |
 | --- | --- |
 | 포트 | 8081 |
-| 데이터베이스 | `member_db` (MySQL 8.0) |
+| 데이터베이스 | `sp_member` (MySQL 8.0) |
 | 소유 테이블 | `member`, `refresh_token` |
 | 기본 패키지 | `com.example.member` |
 | JWT 역할 | **발급(서명)** — RS256 RSA **개인키** 보유 |
@@ -46,7 +46,7 @@ AI 워커는 [`CLAUDE.md`](CLAUDE.md)를 먼저 읽는다.
 
 ## 주요 제약
 
-- `board_db`를 조회하지 않는다. board-service를 호출하지 않는다
+- `sp_board`를 조회하지 않는다. board-service를 호출하지 않는다
 - JWT 필터를 직접 만들지 않는다. Spring Security 표준(`NimbusJwtEncoder`)을 쓴다
 - 개인키(`private.pem`)와 `.env`를 커밋하지 않는다
 - 비밀 값은 환경변수로만 주입하고 기본값을 두지 않는다
@@ -57,7 +57,7 @@ AI 워커는 [`CLAUDE.md`](CLAUDE.md)를 먼저 읽는다.
 **1차는 Docker를 사용하지 않는다.** MySQL은 로컬에 직접 설치한다.
 
 ```sql
-CREATE DATABASE member_db DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+CREATE DATABASE sp_member DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 ```
 
 ```bash
@@ -67,7 +67,7 @@ CREATE DATABASE member_db DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_
 | 환경변수 | 필수 | 설명 |
 | --- | --- | --- |
 | `JWT_PRIVATE_KEY` | O | RSA 개인키 (PKCS#8 PEM). 기본값 없음 |
-| `DB_URL` | | 기본값 `jdbc:mysql://localhost:3306/member_db` |
+| `DB_URL` | | 기본값 `jdbc:mysql://localhost:3306/sp_member` |
 | `DB_USERNAME` / `DB_PASSWORD` | | |
 | `INTERNAL_API_KEY` | O | 내부 API 인증 키 |
 
