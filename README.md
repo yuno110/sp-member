@@ -17,24 +17,24 @@
 정본 문서는 별도 저장소에 있다.
 
 ```bash
-git clone https://github.com/yuno110/simple-docs.git ../simple-docs
+git clone https://github.com/yuno110/sp-docs.git ../sp-docs
 ```
 
 | 무엇을 찾는가 | 문서 |
 | --- | --- |
-| 무슨 문서를 읽어야 하나 | `simple-docs/README.md` |
+| 무슨 문서를 읽어야 하나 | `sp-docs/README.md` |
 | 지금 할 일 | [`docs/checklist.md`](docs/checklist.md) |
-| 작업 항목의 상세 | `simple-docs/plan/phase1.md` |
-| 구현·테스트 절차 | `simple-docs/process/dev-workflow.md` |
-| 엔드포인트·에러 코드 | `simple-docs/api-contract.md` |
-| 엔티티·컬럼 | `simple-docs/domain-model.md` |
-| 기능 요구사항 | `simple-docs/requirements/member.md` |
+| 작업 항목의 상세 | `sp-docs/plan/phase1.md` |
+| 구현·테스트 절차 | `sp-docs/process/dev-workflow.md` |
+| 엔드포인트·에러 코드 | `sp-docs/api-contract.md` |
+| 엔티티·컬럼 | `sp-docs/domain-model.md` |
+| 기능 요구사항 | `sp-docs/requirements/member.md` |
 
 AI 워커는 [`CLAUDE.md`](CLAUDE.md)를 먼저 읽는다.
 
 ## 책임 범위
 
-두 패키지로 나뉜다. 성격이 다르지만 `member` 테이블을 공유하므로 별도 서비스로 분리하지 않는다 (`simple-docs/adr/0006-auth-inside-member-service.md`).
+두 패키지로 나뉜다. 성격이 다르지만 `member` 테이블을 공유하므로 별도 서비스로 분리하지 않는다 (`sp-docs/adr/0006-auth-inside-member-service.md`).
 
 | 패키지 | 관심사 | API 경로 |
 | --- | --- | --- |
