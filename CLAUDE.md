@@ -2,7 +2,9 @@
 
 ## 이 저장소
 
-`member-service`다. 회원 관리와 인증(JWT 발급)을 담당한다. 기본 패키지는 `com.example.member`, 포트는 8081, DB는 `sp_member`다.
+`member-service`다. **회원 프로필(닉네임)만** 담당한다. 기본 패키지는 `com.example.member`, 포트는 8081, DB는 `sp_member`다.
+
+**계정(이메일·비밀번호·권한·RefreshToken)은 auth-service가 소유한다.** JWT는 auth가 발급하고 이 서비스는 공개키로 검증만 한다 (`sp-docs/adr/0012`).
 
 ## 정본 문서
 
@@ -24,10 +26,13 @@ git clone https://github.com/yuno110/sp-docs.git ../sp-docs
 1. `docs/checklist.md`에서 상태가 `doing`인 항목을 찾는다. 있으면 그것을 이어서 한다
 2. 없으면 순서상 다음 `todo`를 고른다. **의존 항목이 모두 `done`이어야 한다**
 3. 고른 항목의 상태를 `doing`으로 바꾼다
-4. `sp-docs/plan/phase1.md`에서 그 항목의 산출물·참조·완료 기준·검증을 읽는다
+4. `sp-docs/plan/phase1.md` **§5**에서 그 항목의 산출물·참조·완료 기준·검증을 읽는다
 5. `sp-docs/process/dev-workflow.md`의 절차를 따른다
 
-이 저장소가 담당하는 항목은 **M-01 ~ M-11**이다. `B-xx`(board) 항목을 처리하지 않는다.
+이 저장소가 담당하는 항목은 **`M-xx`**다. `AU-xx`(auth)·`B-xx`(board)·`D-xx`(문서) 항목을 처리하지 않는다.
+
+> **M-06·M-07은 없다.** auth로 옮겨가 `AU-06`·`AU-07`이 됐다. 번호는 재사용하지 않는다.
+> **M-01R이 있다.** M-01이 `done`인데 auth 분리로 완료 기준이 깨져 신설된 후속 항목이다.
 
 ## 작업 규칙
 
@@ -57,17 +62,52 @@ git clone https://github.com/yuno110/sp-docs.git ../sp-docs
 
 ## 이 서비스의 경계
 
-- **`sp_board`를 조회하지 않는다.** board-service를 호출하지 않는다. 호출 방향은 board → member 단방향이다
-- `auth` 패키지와 `member` 패키지를 나눈다. **의존 방향은 `auth → member` 단방향**이며 `member`는 `auth`를 참조하지 않는다
-- JWT **발급(서명)** 담당이다. RSA 개인키를 갖는다
-- JWT 처리는 Spring Security 표준(`NimbusJwtEncoder`)을 쓴다. **필터·Provider를 직접 만들지 않는다**
-- 시간대는 `Asia/Seoul`로 명시 설정한다
+- **`sp_board`·`sp_auth`를 조회하지 않는다.** board·auth를 호출하지 않는다. 호출 방향은 `board -> member` 단방향 하나뿐이다
+- **`auth` 패키지가 없다.** 계정·인증은 auth-service(`yuno110/sp-auth`)로 옮겨갔다 (`sp-docs/adr/0012`)
+- **이메일·비밀번호·권한을 다루지 않는다.** member는 **프로필(닉네임)만** 소유한다
+- JWT **검증만** 한다. **공개키만 갖는다.** 개인키도, 서명 의존성(`oauth2-jose`)도 두지 않는다
+- JWT 처리는 Spring Security `oauth2-resource-server`를 쓴다. **필터를 직접 만들지 않는다**
+- `LoginMember`는 `(accountId, role)`이다. **`nickname`이 없다** — JWT Claim에 없기 때문이다
+- 시간대는 실행 환경이 정한다. 코드나 `build.gradle`에서 설정하지 않는다 (`sp-docs/adr/0011`)
+
+### 프로필의 세 상태를 구분한다
+
+| 상태 | 표현 |
+| --- | --- |
+| 미등록 | 행이 없다 |
+| 활성 | 행이 있고 `deleted = false` |
+| 탈퇴 | 행이 있고 `deleted = true`, **`nickname`은 NULL** |
+
+**미등록과 탈퇴를 같은 "없음"으로 처리하면 탈퇴한 프로필이 재생성된다.**
+
+**soft delete 시 `nickname`을 NULL로 비운다.** 값을 남기면 `uk_member_nickname` 때문에 그 닉네임이 영구 소각되고, `"탈퇴한 회원"`으로 마스킹해 **저장**하면 두 번째 탈퇴가 UNIQUE 위반으로 500이 난다. `"탈퇴한 회원"`은 **응답 시 변환이지 저장이 아니다.**
+
+### 가입·탈퇴가 2단계다
+
+프로필 등록은 **가입 3단계**(계정 생성 → 로그인 → 프로필 등록)이고, 프로필 탈퇴는 **탈퇴 2단계**(계정 탈퇴 → 프로필 탈퇴)다.
+
+- **`POST /api/v1/members`는 인증이 필요하다.** `account_id`는 **검증된 JWT의 `sub`에서만** 가져온다. 요청 본문의 식별자를 신뢰하지 않는다
+- **`accountId` 기준으로 멱등이다.** 상태별 응답은 `sp-docs/api-contract.md` §3에 있다
+- **탈퇴 시 비밀번호를 받지 않는다.** 재확인은 1단계(auth)에서 끝났다. member는 비밀번호를 갖지 않는다
+- **계정 상태를 확인하지 않는다.** `sp_auth`를 조회할 수 없다. 토큰 서명이 유효하면 진행한다
+- `GET /api/v1/members/me`는 프로필이 없으면 **404 `M001`**이다. 오류가 아니라 가입 3단계 미완료를 뜻한다
+
+### 내부 API — 1차부터 board가 호출한다
+
+더 이상 "2차 대비"가 아니다. **이 API가 없으면 board는 글을 저장할 수 없다.**
+
+- **벌크 하나만 만든다.** 단건 전용 API를 두지 않는다. 실패 의미론을 하나로 유지하기 위해서다
+- **존재하지 않는 `accountId`는 결과에서 제외한다. 404를 반환하지 않는다.** board가 404를 "프로필 없음"으로 해석하면 경로 오설정이 업무 오류로 위장된다
+- 이메일·비밀번호를 반환하지 않는다. 애초에 갖고 있지 않다
+
+계약은 `sp-docs/api-contract.md` §5가 정본이다.
 
 ## 보안
 
-- 개인키(`private.pem`)와 `.env`는 **절대 커밋하지 않는다.** `.gitignore`에 먼저 넣는다
+- **개인키를 이 저장소에 두지 않는다.** 공개키(`jwt-public.pem`)만 갖는다. 공개키는 커밋해도 된다
+- `.env`와 `application-local.yml`은 **절대 커밋하지 않는다.** `.gitignore`에 먼저 넣는다
 - 비밀 값은 환경변수로만 주입하고 기본값을 두지 않는다. 없으면 기동이 실패해야 한다
-- 비밀번호는 어떤 응답에도 넣지 않는다. 내부 API 응답도 마찬가지다
+- 비밀번호를 다루지 않는다. auth 소유다
 - 비밀번호·토큰·키를 로그에 남기지 않는다
 
 ## 상태 갱신
