@@ -17,3 +17,13 @@ spring:
 
 server:
   port: 8081
+
+# 서비스 간 내부 API 인증 키 (sp-docs/security.md §6).
+# 비밀 값이므로 기본값을 두지 않는다. board 와 같은 값이어야 한다.
+member-service:
+  internal-api-key: ${INTERNAL_API_KEY}
+
+# auth-service 가 발급한 토큰을 공개키로 검증만 한다.
+# 개인키는 이 서비스에 없다 (sp-docs/security.md §2).
+jwt:
+  public-key-location: classpath:jwt-public.pem
