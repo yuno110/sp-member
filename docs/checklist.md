@@ -29,7 +29,7 @@
 - [x] M-01 프로젝트 스캐폴딩 · 상태 done
 - [x] M-01R 의존성·설정 정정 · 상태 done
 - [x] M-02 공통 기반 · 상태 done · 리뷰 2라운드
-- [ ] M-03 도메인 기반 · 상태 todo
+- [x] M-03 도메인 기반 · 상태 done
 - [ ] M-04 보안 기반 · 상태 todo
 
 > **M-01R이 왜 있나** — M-01은 `done`이지만 auth 분리로 완료 기준이 깨졌다. `tech-stack.md` §3.2의 의존성 배정이 바뀌어 member는 서명(`oauth2-jose`)이 아니라 검증(`oauth2-resource-server`)이 필요하다. `phase1.md` §2.6 #2에 해당하므로 M-01을 고치지 않고 후속 항목으로 처리한다.
