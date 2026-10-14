@@ -16,4 +16,18 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
 	 */
 	Optional<Member> findByAccountId(Long accountId);
 
+	/**
+	 * 닉네임 선점 여부. {@code GET /members/check-nickname} 과 프로필 등록의 {@code M003}
+	 * 판정이 쓴다 (sp-docs/api-contract.md §2.3 §3).
+	 *
+	 * <p><b>{@code deleted} 를 조건에 넣지 않는다.</b> 탈퇴 시 {@code nickname} 이 NULL 로
+	 * 비워지므로 탈퇴한 프로필은 어떤 닉네임에도 걸리지 않는다 — 해방된 닉네임이 다시 쓸 수
+	 * 있게 되는 것은 특별한 분기가 아니라 그 결과다 (sp-docs/api-contract.md §2.3,
+	 * sp-docs/domain-model.md §3.1). 조건을 넣으면 같은 답을 내면서 "탈퇴를 따로 다룬다"는
+	 * 잘못된 인상을 남긴다.
+	 *
+	 * <p>이 조회는 경합을 막지 못한다. 최종 판정은 {@code uk_member_nickname} 이다 (§2.3).
+	 */
+	boolean existsByNickname(String nickname);
+
 }
