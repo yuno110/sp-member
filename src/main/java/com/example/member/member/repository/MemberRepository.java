@@ -30,4 +30,23 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
 	 */
 	boolean existsByNickname(String nickname);
 
+	/**
+	 * <b>다른 계정이 이 닉네임을 쥐고 있는가.</b> 닉네임 변경의 사전 검사가 쓴다 —
+	 * {@code PATCH /api/v1/members/me} 는 <b>자기 행을 제외하고 검사하며 그 기준이
+	 * {@code accountId} 다</b> (sp-docs/requirements/member.md §7).
+	 *
+	 * <p><b>값 동일성으로 제외할 수 없어서 이 조회가 필요하다.</b> 세 스키마의 콜레이션이
+	 * {@code utf8mb4_general_ci} 여서 (sp-docs/tech-stack.md §4.1) 대소문자를 구분하지 않으므로,
+	 * {@code abc} 를 쥔 사람이 {@code ABC} 로 바꾸면 요청값과 현재 닉네임은 다른데 조회는 자기
+	 * 행을 찾는다 — {@code uk_member_nickname} 은 같은 행이므로 그 UPDATE 를 허용하는데 사전
+	 * 검사만 409 {@code M003} 을 낸다. {@code accountId} 로 제외하면 콜레이션과 무관해진다.
+	 *
+	 * <p>{@code deleted} 를 조건에 넣지 않는 이유는 {@link #existsByNickname} 과 같다 — 탈퇴한
+	 * 프로필은 {@code nickname} 이 NULL 이라 어떤 닉네임에도 걸리지 않는다.
+	 *
+	 * <p>이 조회도 경합을 막지 못한다. 최종 판정은 {@code uk_member_nickname} 이고 그것을 밟았을
+	 * 때의 결론은 {@code MemberService.updateNickname} 에 있다 (§7).
+	 */
+	boolean existsByNicknameAndAccountIdNot(String nickname, Long accountId);
+
 }

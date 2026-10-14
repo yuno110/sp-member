@@ -3,6 +3,7 @@ package com.example.member.member.controller;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -32,19 +33,21 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 /**
- * sp-docs/plan/phase1.md §5 M-05 의 "검증" 표 중 HTTP 쪽을 테스트로 옮긴 것이다. 정본은
+ * sp-docs/plan/phase1.md §5 M-05 · M-08 의 "검증" 표 중 HTTP 쪽을 테스트로 옮긴 것이다. 정본은
  * sp-docs/api-contract.md §2.3 §3 §3.1 §8.2 §9.1, 검증 규칙은
- * sp-docs/requirements/member.md §2 다.
+ * sp-docs/requirements/member.md §2 §5 §7 이다.
  *
- * <p>인가 필터를 포함한 전 구간을 지난다 — {@code POST /api/v1/members} 는 인증이고
- * {@code GET /members/check-nickname} 은 무인증이다 (§3 의 "인증" 열).
+ * <p>인가 필터를 포함한 전 구간을 지난다 — {@code POST /api/v1/members} 와
+ * {@code /api/v1/members/me} 는 인증이고 {@code GET /members/check-nickname} 은 무인증이다
+ * (§3 의 "인증" 열).
  *
  * <p><b>경로별 인가 행렬은 {@code SecurityConfigTest} 가 본다.</b> 여기서 토큰 없는 접근을 보는
- * 것은 응답 본문과 "저장되지 않았다" 까지 함께 단언하는 경우뿐이다.
+ * 것은 응답 본문과 "저장되지 않았다"·"바뀌지 않았다" 까지 함께 단언하는 경우뿐이다.
  *
- * <p>픽스처의 {@code accountId} 는 211 부터, 닉네임은 {@code 관리자} 가 아닌 값을 쓴다. ADMIN
- * seed 가 {@code (1, '관리자')} 를 넣으므로 겹치면 UNIQUE 위반으로 깨진다
- * (sp-docs/requirements/member.md §10.1).
+ * <p>픽스처의 {@code accountId} 는 M-05 가 211~, <b>M-08 이 251~</b> 을 쓰고, 닉네임은
+ * {@code 관리자} 가 아닌 값을 쓴다. ADMIN seed 가 {@code (1, '관리자')} 를 넣으므로 겹치면 UNIQUE
+ * 위반으로 깨진다 (sp-docs/requirements/member.md §10.1). M-08 의 {@code MemberServiceTest}
+ * 픽스처(241~)와도 범위를 겹치지 않게 둔다.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -54,6 +57,8 @@ class MemberControllerTest {
 	private static final String PATH = "/api/v1/members";
 
 	private static final String CHECK_PATH = PATH + "/check-nickname";
+
+	private static final String ME_PATH = PATH + "/me";
 
 	/** {@code V2__seed_admin_profile.sql} 의 프로필 (sp-docs/requirements/member.md §10.1). */
 	private static final Long SEED_ACCOUNT_ID = 1L;
@@ -424,11 +429,285 @@ class MemberControllerTest {
 				.andExpect(jsonPath("$.error.fieldErrors[0].message").value(NICKNAME_MESSAGE));
 	}
 
+	// --- 내 프로필 조회·수정 (sp-docs/api-contract.md §3.1) ---
+
+	@Test
+	@DisplayName("내 프로필 조회는 200 과 그 계정의 닉네임을 돌려준다")
+	void 내_프로필_조회() throws Exception {
+		this.mockMvc.perform(등록(251L, """
+						{"nickname": "조회되는사람"}""")).andExpect(status().isCreated());
+
+		this.mockMvc.perform(내_프로필(251L))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.success").value(true))
+				.andExpect(jsonPath("$.data.accountId").value(251))
+				.andExpect(jsonPath("$.data.nickname").value("조회되는사람"))
+				.andExpect(jsonPath("$.error").doesNotExist());
+	}
+
+	/**
+	 * 검증표: <b>응답 키 집합은 {@code accountId}·{@code nickname} 정확히 둘</b>이고
+	 * {@code email}·{@code accessToken}·{@code createdAt} 이 없다 (sp-docs/api-contract.md §3.1).
+	 *
+	 * <p>조회와 수정을 함께 본다 — <b>두 응답의 모양이 같아야 하고</b>(§3.1) 수정 쪽에는
+	 * <b>토큰 키가 없어야 한다</b>. Claim 에 {@code nickname} 이 없어 토큰이 낡을 이유가 없고,
+	 * member 는 개인키를 갖지 않으므로 발급할 수도 없다 (sp-docs/requirements/member.md §7).
+	 *
+	 * <p><b>키마다 {@code doesNotExist} 를 쓰지 않는다.</b> 그러면 여기 적어 둔 이름만 막히고 새로
+	 * 늘어난 키는 통과한다 — 집합 자체를 단언한다. 수정 응답은 <b>봉투까지</b> 본다: 토큰이 들어갈
+	 * 자리는 {@code data} 안이거나 봉투이고, 봉투의 키는 {@code ApiResponse} 의 셋이다
+	 * (sp-docs/api-contract.md §7).
+	 */
+	@Test
+	@DisplayName("조회·수정 응답의 data 키가 accountId·nickname 둘뿐이고 어디에도 토큰 키가 없다")
+	void 응답_키_집합() throws Exception {
+		this.mockMvc.perform(등록(252L, """
+						{"nickname": "키집합"}""")).andExpect(status().isCreated());
+
+		String 조회 = this.mockMvc.perform(내_프로필(252L))
+				.andExpect(status().isOk())
+				.andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+		String 수정 = this.mockMvc.perform(닉네임_수정(252L, """
+						{"nickname": "바꾼키집합"}"""))
+				.andExpect(status().isOk())
+				.andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+		assertThat(JsonPath.<Map<String, Object>>read(조회, "$.data"))
+				.as("GET /me 는 accountId·nickname 둘만 돌려준다 — createdAt 은 "
+						+ "GET /members/{accountId} 의 것이다 (sp-docs/api-contract.md §3.1)")
+				.containsOnlyKeys("accountId", "nickname");
+		assertThat(JsonPath.<Map<String, Object>>read(수정, "$.data"))
+				.as("PATCH /me 의 응답 모양은 GET /me 와 같다 (§3.1)")
+				.containsOnlyKeys("accountId", "nickname");
+		assertThat(JsonPath.<Map<String, Object>>read(수정, "$"))
+				.as("봉투에도 토큰 키가 없다 (sp-docs/requirements/member.md §7)")
+				.containsOnlyKeys("success", "data", "error");
+	}
+
+	/**
+	 * 검증표: <b>프로필 없는 계정으로 조회하면 404 {@code M001}</b> 이다. 오류가 아니라 가입 3단계
+	 * 미완료를 뜻한다 (sp-docs/api-contract.md §3 §8.2).
+	 */
+	@Test
+	@DisplayName("프로필 없는 계정으로 조회하면 404 M001 이다")
+	void 프로필_없는_계정_조회() throws Exception {
+		this.mockMvc.perform(내_프로필(253L))
+				.andExpect(status().isNotFound())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.data").doesNotExist())
+				.andExpect(jsonPath("$.error.code").value("M001"))
+				.andExpect(jsonPath("$.error.message").value("프로필을 찾을 수 없습니다."));
+	}
+
+	@Test
+	@DisplayName("닉네임 변경은 200 과 갱신된 프로필이고 DB 에 반영된다")
+	void 닉네임_변경() throws Exception {
+		this.mockMvc.perform(등록(254L, """
+						{"nickname": "옛닉네임"}""")).andExpect(status().isCreated());
+
+		this.mockMvc.perform(닉네임_수정(254L, """
+						{"nickname": "새닉네임"}"""))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.success").value(true))
+				.andExpect(jsonPath("$.data.accountId").value(254))
+				.andExpect(jsonPath("$.data.nickname").value("새닉네임"))
+				.andExpect(jsonPath("$.error").doesNotExist());
+
+		assertThat(this.memberRepository.findByAccountId(254L).orElseThrow().getNickname())
+				.as("응답만 바뀌고 DB 가 그대로면 다음 조회가 옛 닉네임을 돌려준다")
+				.isEqualTo("새닉네임");
+	}
+
+	@Test
+	@DisplayName("타인이 쓰는 닉네임으로 변경하면 409 M003 이고 닉네임이 바뀌지 않는다")
+	void 타인_닉네임으로_변경() throws Exception {
+		this.mockMvc.perform(등록(255L, """
+						{"nickname": "선점한닉네임"}""")).andExpect(status().isCreated());
+		this.mockMvc.perform(등록(257L, """
+						{"nickname": "바꾸려는사람"}""")).andExpect(status().isCreated());
+
+		this.mockMvc.perform(닉네임_수정(257L, """
+						{"nickname": "선점한닉네임"}"""))
+				.andExpect(status().isConflict())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.error.code").value("M003"))
+				.andExpect(jsonPath("$.error.message").value("이미 사용 중인 닉네임입니다."));
+
+		assertThat(this.memberRepository.findByAccountId(257L).orElseThrow().getNickname())
+				.isEqualTo("바꾸려는사람");
+	}
+
+	/**
+	 * 검증표: <b>자기 현재 닉네임으로 변경하면 200</b> 이다. 중복 검사가 자기 행을 제외하지 않으면
+	 * 409 {@code M003} 이 나가고, 바꾸지 않은 필드를 함께 보내는 평범한 수정 화면이 막힌다
+	 * (sp-docs/requirements/member.md §7).
+	 */
+	@Test
+	@DisplayName("자기 현재 닉네임으로 변경하면 200 이고 닉네임이 그대로다")
+	void 자기_현재_닉네임으로_변경() throws Exception {
+		this.mockMvc.perform(등록(258L, """
+						{"nickname": "그대로인닉"}""")).andExpect(status().isCreated());
+
+		this.mockMvc.perform(닉네임_수정(258L, """
+						{"nickname": "그대로인닉"}"""))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.success").value(true))
+				.andExpect(jsonPath("$.data.nickname").value("그대로인닉"))
+				.andExpect(jsonPath("$.error").doesNotExist());
+
+		assertThat(this.memberRepository.findByAccountId(258L).orElseThrow().getNickname())
+				.isEqualTo("그대로인닉");
+	}
+
+	/**
+	 * 검증표의 "닉네임 1자" 다. 규칙은 등록과 같은 <b>2~10자, 한글/영문/숫자</b>이므로
+	 * (sp-docs/requirements/member.md §2) 경계 둘과 문자 집합을 함께 본다 — 1자만 보면 수정 쪽
+	 * 규칙이 길이뿐인 구현도 통과하고, 그 상태에서 등록이 거부하는 값을 수정이 통과시킨다.
+	 *
+	 * <p><b>{@code nickname} 누락·{@code null} 도 함께 본다.</b> {@code @Pattern} 은 {@code null}
+	 * 을 유효로 취급하므로 {@code @NotNull} 이 없으면 그 요청이 서비스까지 내려간다. <b>거기서
+	 * 터지지는 않는다</b> — 중복 검사의 제외 기준이 {@code accountId} 라 요청값과 현재 닉네임을
+	 * 비교하는 자리가 없다 (sp-docs/requirements/member.md §7).
+	 *
+	 * <p><b>{@code @NotNull} 을 떼고 직접 측정한 값이다.</b> 아래 두 본문({@code {}} 과
+	 * {@code {"nickname": null}})이 모두 <b>200</b> 과
+	 * {@code {"success":true,"data":{"accountId":...,"nickname":null},"error":null}} 로 나가고,
+	 * <b>활성 행({@code deleted = false})의 {@code nickname} 이 NULL 로 써진다.</b> NULL 닉네임은
+	 * sp-docs/domain-model.md §3.1 이 <b>탈퇴</b>에 배정한 표현이므로, 활성인데 닉네임이 없는 —
+	 * 세 상태 어디에도 없는 행이 남는다. <b>500 보다 나쁜 결말이다</b>: 500 은 드러나지만 이쪽은
+	 * {@code success: true} 로 조용히 지나간다. {@code @NotNull} 은 올바르고, 떼면 이 테스트의 두
+	 * 케이스가 {@code Status expected:<400> but was:<200>} 으로 빨개져 그것을 잡는다.
+	 *
+	 * <p>닉네임이 바뀌지 않았음을 함께 단언한다 — 상태 코드만 보면 "거부했지만 이미 썼다" 를
+	 * 놓친다.
+	 */
+	@ParameterizedTest(name = "body={0}")
+	@ValueSource(strings = {
+			"{\"nickname\": \"가\"}",
+			"{\"nickname\": \"가나다라마바사아자차카\"}",
+			"{\"nickname\": \"nick!\"}",
+			"{}",
+			"{\"nickname\": null}"})
+	@DisplayName("닉네임 규칙을 어긴 수정은 400 C001 이고 fieldErrors 1건이며 닉네임이 바뀌지 않는다")
+	void 닉네임_규칙_위반_수정(String body) throws Exception {
+		this.mockMvc.perform(등록(259L, """
+						{"nickname": "안바뀌는닉"}""")).andExpect(status().isCreated());
+
+		this.mockMvc.perform(닉네임_수정(259L, body))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.error.code").value("C001"))
+				.andExpect(jsonPath("$.error.message").value("잘못된 입력값입니다."))
+				.andExpect(jsonPath("$.error.fieldErrors", hasSize(1)))
+				.andExpect(jsonPath("$.error.fieldErrors[0].field").value("nickname"))
+				.andExpect(jsonPath("$.error.fieldErrors[0].message").value(NICKNAME_MESSAGE));
+
+		assertThat(this.memberRepository.findByAccountId(259L).orElseThrow().getNickname())
+				.isEqualTo("안바뀌는닉");
+	}
+
+	/**
+	 * 검증표: <b>탈퇴한 프로필로 조회하면 404 {@code M001}</b> 이다
+	 * (sp-docs/api-contract.md §3.1 의 표). 같은 프로필을 {@code GET /{accountId}} 로 보면 200 이
+	 * 되는데(M-10), 그 차이가 의도다 — {@code /me} 는 "내 프로필을 보러 왔다" 이고 탈퇴했으면 볼
+	 * 것이 없다.
+	 */
+	@Test
+	@DisplayName("탈퇴한 프로필로 조회하면 404 M001 이다")
+	void 탈퇴한_프로필_조회() throws Exception {
+		this.mockMvc.perform(등록(260L, """
+						{"nickname": "곧탈퇴한다"}""")).andExpect(status().isCreated());
+		this.mockMvc.perform(내_프로필(260L))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.nickname").value("곧탈퇴한다"));
+
+		탈퇴시킨다(260L);
+
+		this.mockMvc.perform(내_프로필(260L))
+				.andExpect(status().isNotFound())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.error.code").value("M001"))
+				.andExpect(jsonPath("$.error.message").value("프로필을 찾을 수 없습니다."));
+	}
+
+	/**
+	 * 검증표: <b>탈퇴한 프로필로 수정하면 404 {@code M001}</b> 이다
+	 * (sp-docs/api-contract.md §3.1 의 표 — 닫힌 행에 쓰기를 허용할 이유가 없다).
+	 *
+	 * <p>통과하면 탈퇴한 행이 닉네임을 쥔 채로 남는다 — 세 상태 어디에도 없는 표현이고 그 값은
+	 * {@code uk_member_nickname} 에 선점된다. 그래서 행 상태까지 단언한다
+	 * (sp-docs/domain-model.md §3.1).
+	 */
+	@Test
+	@DisplayName("탈퇴한 프로필로 수정하면 404 M001 이고 닉네임이 되살아나지 않는다")
+	void 탈퇴한_프로필_수정() throws Exception {
+		this.mockMvc.perform(등록(261L, """
+						{"nickname": "탈퇴할사람"}""")).andExpect(status().isCreated());
+		탈퇴시킨다(261L);
+
+		this.mockMvc.perform(닉네임_수정(261L, """
+						{"nickname": "되살리려는닉"}"""))
+				.andExpect(status().isNotFound())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.error.code").value("M001"))
+				.andExpect(jsonPath("$.error.message").value("프로필을 찾을 수 없습니다."));
+
+		Member stale = this.memberRepository.findByAccountId(261L).orElseThrow();
+		assertThat(stale.isDeleted()).isTrue();
+		assertThat(stale.getNickname()).isNull();
+	}
+
+	/**
+	 * 검증표: <b>토큰 없이 {@code /me} 에 접근하면 401 {@code A001}</b> 이다
+	 * (sp-docs/api-contract.md §8.5).
+	 *
+	 * <p>경로별 인가 행렬은 {@code SecurityConfigTest} 가 본다. 여기서 함께 보는 것은 <b>본문이
+	 * 아무 효과도 내지 않았다</b>는 것이다 — 인증 전에 끊겼으므로 닉네임이 적용될 자리가 없다.
+	 */
+	@Test
+	@DisplayName("토큰 없이 /me 를 조회·수정하면 401 A001 이고 닉네임이 바뀌지 않는다")
+	void 토큰_없이_me_접근() throws Exception {
+		this.mockMvc.perform(등록(262L, """
+						{"nickname": "토큰없이는못바꿈"}""")).andExpect(status().isCreated());
+
+		this.mockMvc.perform(get(ME_PATH))
+				.andExpect(status().isUnauthorized())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.error.code").value("A001"))
+				.andExpect(jsonPath("$.error.message").value("인증이 필요합니다."));
+
+		this.mockMvc.perform(patch(ME_PATH)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("""
+								{"nickname": "바꿔본다"}"""))
+				.andExpect(status().isUnauthorized())
+				.andExpect(jsonPath("$.error.code").value("A001"))
+				.andExpect(jsonPath("$.error.message").value("인증이 필요합니다."));
+
+		assertThat(this.memberRepository.findByAccountId(262L).orElseThrow().getNickname())
+				.isEqualTo("토큰없이는못바꿈");
+	}
+
 	private static MockHttpServletRequestBuilder 등록(long accountId, String body) {
 		return post(PATH)
-				.header(HttpHeaders.AUTHORIZATION, "Bearer " + TestTokenFactory.accessToken(accountId, "USER"))
+				.header(HttpHeaders.AUTHORIZATION, bearer(accountId))
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(body);
+	}
+
+	private static MockHttpServletRequestBuilder 내_프로필(long accountId) {
+		return get(ME_PATH).header(HttpHeaders.AUTHORIZATION, bearer(accountId));
+	}
+
+	private static MockHttpServletRequestBuilder 닉네임_수정(long accountId, String body) {
+		return patch(ME_PATH)
+				.header(HttpHeaders.AUTHORIZATION, bearer(accountId))
+				.contentType(MediaType.APPLICATION_JSON)
+				.content(body);
+	}
+
+	private static String bearer(long accountId) {
+		return "Bearer " + TestTokenFactory.accessToken(accountId, "USER");
 	}
 
 	/** 실제 탈퇴 경로는 M-09 다. 지금은 엔티티 메서드로 같은 상태를 만든다. */

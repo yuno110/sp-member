@@ -4,10 +4,12 @@ import com.example.member.global.error.BusinessException;
 import com.example.member.global.error.ErrorCode;
 import com.example.member.member.dto.CheckResponse;
 import com.example.member.member.dto.MemberResponse;
+import com.example.member.member.dto.NicknameUpdateRequest;
 import com.example.member.member.dto.ProfileCreateRequest;
 import com.example.member.member.dto.ProfileRegistration;
 import com.example.member.member.entity.Member;
 import com.example.member.member.repository.MemberRepository;
+import com.example.member.member.support.MemberReader;
 import java.util.Optional;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -41,6 +43,15 @@ public class MemberService {
 	private final MemberRepository memberRepository;
 
 	/**
+	 * 내 프로필을 읽는 지점. <b>없으면 {@code M001} 을 던진다</b> — 그 결론이 {@link MemberReader}
+	 * 에 있다.
+	 *
+	 * <p><b>탈퇴 여부는 거기서 보지 않는다.</b> 상태별 결론은 호출하는 쪽이 정하므로
+	 * {@link #myActiveProfile} 이 탈퇴를 가른다.
+	 */
+	private final MemberReader memberReader;
+
+	/**
 	 * <b>{@code PROPAGATION_REQUIRES_NEW} 다.</b> 이 전파 수준을 요구하는 이유가 둘이다.
 	 *
 	 * <ul>
@@ -67,8 +78,13 @@ public class MemberService {
 	 */
 	private final TransactionTemplate freshRead;
 
-	public MemberService(MemberRepository memberRepository, PlatformTransactionManager transactionManager) {
+	public MemberService(
+			MemberRepository memberRepository,
+			MemberReader memberReader,
+			PlatformTransactionManager transactionManager) {
+
 		this.memberRepository = memberRepository;
+		this.memberReader = memberReader;
 		this.freshRead = new TransactionTemplate(transactionManager);
 		this.freshRead.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
 		this.freshRead.setReadOnly(true);
@@ -198,6 +214,101 @@ public class MemberService {
 	@Transactional(readOnly = true)
 	public CheckResponse checkNickname(String nickname) {
 		return new CheckResponse(!this.memberRepository.existsByNickname(nickname));
+	}
+
+	/**
+	 * MR-07 의 프로필 절반 — 내 프로필 조회 (sp-docs/requirements/member.md §5).
+	 *
+	 * <p>돌려주는 것은 {@code accountId}·{@code nickname} 이다 ({@link MemberResponse},
+	 * sp-docs/api-contract.md §3.1). <b>이메일을 담지 않는다</b> — member 는 소유하지 않으므로
+	 * 알지 못하고, 필요하면 클라이언트가 auth 의 {@code GET /api/v1/accounts/me} 를 따로 부른다
+	 * (§5). <b>{@code createdAt} 도 담지 않는다</b> — MR-07 이 member 에 배정한 것은 닉네임뿐이고,
+	 * 가입일을 함께 주는 것은 {@code GET /api/v1/members/{accountId}} 다
+	 * (sp-docs/api-contract.md §3.1).
+	 *
+	 * <p>프로필이 없거나 탈퇴했으면 {@code M001} 이다 ({@link #myActiveProfile}).
+	 */
+	@Transactional(readOnly = true)
+	public MemberResponse getMyProfile(Long accountId) {
+		return MemberResponse.from(myActiveProfile(accountId));
+	}
+
+	/**
+	 * MR-08 — 닉네임 변경 (sp-docs/requirements/member.md §7). 중복 검사 → 갱신 → <b>갱신된 프로필
+	 * 반환</b>이고, 응답 모양은 {@code GET /me} 와 같다 (sp-docs/api-contract.md §3.1).
+	 *
+	 * <p><b>토큰을 반환하지 않는다.</b> Claim 에 {@code nickname} 이 없어 토큰이 낡을 이유가 없고
+	 * (sp-docs/api-contract.md §6), member 는 개인키를 갖지 않으므로 발급할 수도 없다 (§7).
+	 *
+	 * <p><b>중복 검사는 자기 행을 제외한다</b> (§7). 제외하지 않으면 사전 검사가 자기 행을 찾아
+	 * {@code M003} 을 내는데, 그것은 자기가 쓰고 있는 값을 "이미 사용 중" 이라고 거부하는 셈이고
+	 * 바꾸지 않은 필드를 함께 보내는 평범한 수정 화면이 막힌다. <b>제외를 사전 검사 쪽에서 하는
+	 * 이유</b>는 {@code uk_member_nickname} 이 이 경우 깨지지 않기 때문이다 — 같은 행을 같은 값으로
+	 * 쓰므로 제약은 통과하고, 막는 것은 사전 검사뿐이다 (§7).
+	 *
+	 * <p><b>제외 기준은 {@code accountId} 다. 값 동일성이 아니다</b> (§7) — 그래서
+	 * {@link MemberRepository#existsByNicknameAndAccountIdNot} 를 쓴다. 근거(콜레이션)와 이 저장소의
+	 * 테스트가 그 입력을 재현하지 못하는 이유는 그 메서드의 javadoc 에 있다.
+	 *
+	 * <p><b>사전 검사는 경합을 막지 못한다.</b> 확인과 UPDATE 사이에 타인이 그 닉네임을 등록하면
+	 * 최종 판정은 {@code uk_member_nickname} 이고, 그 결론도 409 {@code M003} 이다 (§7,
+	 * sp-docs/api-contract.md §2.3 이 생성 경로에 정한 것과 같다). <b>500 으로 내보내지 않는다</b> —
+	 * 클라이언트가 잘못한 것이 없는데 마지막 그물이 {@code log.error} 를 남기면 흔한 경합이 경보가
+	 * 된다 (sp-docs/conventions.md §6.1 의 로그 수준 분리).
+	 *
+	 * <p><b>이 경로의 결론은 {@link #resolveIntegrityViolation} 보다 단순하다.</b> 여기에는
+	 * {@code uk_member_account_id} 경합이 없다 — 자기 행을 {@code accountId} 로 집어 UPDATE 하므로
+	 * 그 UNIQUE 를 건드리지 않고, 깨질 수 있는 UNIQUE 는 닉네임 하나다. 그래서 등록 쪽이 필요로 한
+	 * "내 {@code accountId} 의 상태를 새 트랜잭션에서 되읽어 200/{@code M006}/{@code M007} 로
+	 * 가르기" 가 필요 없고, 결론이 둘로 끝난다 — {@code uk_member_nickname} 이면 {@code M003},
+	 * <b>그 밖은 다시 던진다</b> (§7). 후자를 {@code M003} 으로 돌리면 서버 결함이 "닉네임 중복" 으로
+	 * 위장되고 {@code log.error} 도 남지 않는다.
+	 */
+	@Transactional
+	public MemberResponse updateNickname(Long accountId, NicknameUpdateRequest request) {
+		Member profile = myActiveProfile(accountId);
+		String nickname = request.nickname();
+
+		if (this.memberRepository.existsByNicknameAndAccountIdNot(nickname, accountId)) {
+			throw new BusinessException(ErrorCode.NICKNAME_DUPLICATED);
+		}
+
+		profile.updateNickname(nickname);
+
+		try {
+			// flush 다. 더티 체킹에 맡기면 UPDATE 가 커밋 시점(이 메서드 밖)에 발행되어 제약 위반이
+			// 아래 catch 를 지나치고 500 C005 로 새어 나간다
+			this.memberRepository.flush();
+		} catch (DataIntegrityViolationException e) {
+			if (constraintNameOf(e).contains(UK_MEMBER_NICKNAME)) {
+				throw new BusinessException(ErrorCode.NICKNAME_DUPLICATED);
+			}
+			throw e;
+		}
+
+		return MemberResponse.from(profile);
+	}
+
+	/**
+	 * {@code /me} 가 다루는 내 프로필. <b>없으면 {@code M001}, 탈퇴했으면 똑같이 {@code M001}</b>
+	 * 이다 — sp-docs/api-contract.md §3.1 의 표가 {@code GET /me} 와 {@code PATCH /me} 두 행에 같은
+	 * 결론을 적는다.
+	 *
+	 * <p>앞은 {@link MemberReader} 가 내고 뒤는 여기서 낸다. 그쪽은 탈퇴 여부를 보지 않으며 상태별
+	 * 결론을 호출하는 쪽에 맡긴다.
+	 *
+	 * <p><b>두 상태가 같은 코드로 나가는 것이 의도다.</b> {@code /me} 는 "내 프로필을 보러·고치러
+	 * 왔다" 이고 탈퇴했으면 볼 것도 고칠 것도 없다. 반대로 {@code GET /{accountId}} 는 탈퇴한
+	 * 프로필에 200 과 {@code deleted: true} 를 준다 (§3.1) — 그쪽은 글쓴이의 표시 이름이므로 글이
+	 * 남아 있는 한 표시할 것이 있다. <b>그래서 "탈퇴 = 없음" 을 {@link MemberReader} 로 올리지
+	 * 않는다</b> — 올리면 그 결론이 공개 조회와 프로필 등록({@code M007})에도 적용된다.
+	 */
+	private Member myActiveProfile(Long accountId) {
+		Member profile = this.memberReader.getByAccountId(accountId);
+		if (!profile.isActive()) {
+			throw new BusinessException(ErrorCode.MEMBER_NOT_FOUND);
+		}
+		return profile;
 	}
 
 	/**

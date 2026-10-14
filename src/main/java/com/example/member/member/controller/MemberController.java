@@ -5,6 +5,7 @@ import com.example.member.global.security.CurrentMember;
 import com.example.member.global.security.LoginMember;
 import com.example.member.member.dto.CheckResponse;
 import com.example.member.member.dto.MemberResponse;
+import com.example.member.member.dto.NicknameUpdateRequest;
 import com.example.member.member.dto.ProfileCreateRequest;
 import com.example.member.member.dto.ProfileRegistration;
 import com.example.member.member.service.MemberService;
@@ -14,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -91,6 +93,49 @@ public class MemberController {
 			String nickname) {
 
 		return ApiResponse.success(this.memberService.checkNickname(nickname));
+	}
+
+	/**
+	 * MR-07 의 프로필 절반 — 내 프로필 조회. 200 과 {@code {accountId, nickname}}
+	 * (sp-docs/api-contract.md §3.1).
+	 *
+	 * <p><b>이메일·가입일이 없다.</b> 이메일은 member 가 소유하지 않고, 가입일을 함께 주는 것은
+	 * {@code GET /api/v1/members/{accountId}} 다 (§3.1, sp-docs/requirements/member.md §5). 화면
+	 * 하나에 이메일까지 필요하면 클라이언트가 auth 의 {@code GET /api/v1/accounts/me} 를 따로
+	 * 부른다 — member 가 auth 를 호출해 합치지 않는다 (sp-docs/adr/0012 §1).
+	 *
+	 * <p><b>조회 대상은 검증된 토큰의 {@code sub} 가 정한다.</b> 경로에 식별자가 없으므로 타인의
+	 * 프로필이 이 경로로 나갈 수 없다 (sp-docs/security.md §4).
+	 *
+	 * <p>프로필이 없으면 404 {@code M001} 이다 — <b>오류가 아니라 가입 3단계 미완료</b>를 뜻하고
+	 * 클라이언트는 프로필 등록 화면으로 보낸다 (sp-docs/api-contract.md §3,
+	 * sp-docs/requirements/member.md §5). <b>탈퇴한 프로필도 같은 404 {@code M001}</b> 이다
+	 * (§3.1 의 표).
+	 */
+	@GetMapping("/me")
+	public ApiResponse<MemberResponse> getMyProfile(@CurrentMember LoginMember loginMember) {
+		return ApiResponse.success(this.memberService.getMyProfile(loginMember.accountId()));
+	}
+
+	/**
+	 * MR-08 — 닉네임 수정. 200 과 <b>갱신된 프로필</b>이고 응답 모양은 {@code GET /me} 와 같다
+	 * (sp-docs/api-contract.md §3.1, sp-docs/requirements/member.md §7).
+	 *
+	 * <p><b>응답에 토큰이 없다.</b> Claim 에 {@code nickname} 이 없어 토큰이 낡을 이유가 없고
+	 * (sp-docs/api-contract.md §6), member 는 개인키를 갖지 않으므로 발급할 수도 없다
+	 * (sp-docs/requirements/member.md §7).
+	 *
+	 * <p>타인이 쓰는 닉네임이면 409 {@code M003} 이고, <b>자기 현재 닉네임이면 200</b> 이다 —
+	 * 중복 검사가 자기 행을 제외한다 (§7). 닉네임 규칙 위반은 400 {@code C001} 이고
+	 * {@code fieldErrors} 에 {@code nickname} 이 담긴다 ({@link NicknameUpdateRequest}).
+	 * 프로필이 없거나 <b>탈퇴했으면 404 {@code M001}</b> 이다 (sp-docs/api-contract.md §3.1 의 표).
+	 */
+	@PatchMapping("/me")
+	public ApiResponse<MemberResponse> updateNickname(
+			@CurrentMember LoginMember loginMember,
+			@Valid @RequestBody NicknameUpdateRequest request) {
+
+		return ApiResponse.success(this.memberService.updateNickname(loginMember.accountId(), request));
 	}
 
 }
