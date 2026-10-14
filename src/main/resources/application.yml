@@ -14,16 +14,40 @@ spring:
           time_zone: Asia/Seoul
   jackson:
     time-zone: Asia/Seoul
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          # auth-service 가 발급한 토큰을 공개키로 검증만 한다. 개인키는 이 서비스에 없다
+          # (sp-docs/security.md §2 §3). 공개키는 커밋해도 된다.
+          #
+          # 이 키 이름이 정본이다 (sp-docs/tech-stack.md §2.1). 표준 키를 쓰면 스타터가
+          # JwtDecoder 를 자동구성하므로 서명 검증·만료 확인·SecurityContext 주입을 직접
+          # 만들 것이 없다. 자동구성이 기동 시점에 이 파일을 읽으므로, 파일이 없으면
+          # 기동이 실패한다 (실측)
+          public-key-location: classpath:jwt-public.pem
 
 server:
   port: 8081
+
+# health 만 노출한다. 그 밖의 actuator 경로는 노출 자체를 막는다
+# (sp-docs/security.md §5.1.1). 인가 쪽 차단은 SecurityConfig 가 한다
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
 
 # 서비스 간 내부 API 인증 키 (sp-docs/security.md §6).
 # 비밀 값이므로 기본값을 두지 않는다. board 와 같은 값이어야 한다.
 member-service:
   internal-api-key: ${INTERNAL_API_KEY}
 
-# auth-service 가 발급한 토큰을 공개키로 검증만 한다.
-# 개인키는 이 서비스에 없다 (sp-docs/security.md §2).
-jwt:
-  public-key-location: classpath:jwt-public.pem
+# CORS 허용 오리진 화이트리스트.
+#
+# 허용 오리진은 환경이 정한다 (sp-docs/security.md §1.1). 정책값이므로 기본값을 두지
+# 않는다 — 임의의 기본값을 두면 그 값이 정해진 정책인지 임시값인지 구분할 수 없고 운영에
+# 그대로 나간다 (sp-docs/tech-stack.md §4.3). 비었거나 * 가 섞이면 SecurityConfig 의
+# 가드가 기동을 실패시킨다. 로컬 값은 application-local.yml 이 준다
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS}
