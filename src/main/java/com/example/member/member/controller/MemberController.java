@@ -14,12 +14,14 @@ import jakarta.validation.constraints.Pattern;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
@@ -136,6 +138,34 @@ public class MemberController {
 			@Valid @RequestBody NicknameUpdateRequest request) {
 
 		return ApiResponse.success(this.memberService.updateNickname(loginMember.accountId(), request));
+	}
+
+	/**
+	 * MR-10 의 2단계 — 프로필 탈퇴. <b>204, 본문 없음</b> (sp-docs/api-contract.md §3 의 표,
+	 * sp-docs/requirements/member.md §8).
+	 *
+	 * <p><b>멱등이다. 이미 탈퇴한 프로필에 다시 호출해도 204</b> 다 — §3.1 의 표에서
+	 * {@code DELETE /me} 는 404 가 아닌 유일한 {@code /me} 행이고, auth 의
+	 * {@code DELETE /accounts/me} 가 같은 예외다 (§2.2). 프로필 행이 <b>아예 없으면</b>
+	 * 404 {@code M001} 이다 ({@link MemberService#withdraw} 의 근거).
+	 *
+	 * <p><b>본문을 받지 않는다 — 비밀번호를 포함해서다.</b> member 는 비밀번호를 갖지 않으며
+	 * 재확인은 1단계인 auth 의 {@code DELETE /api/v1/accounts/me} 에서 끝났다
+	 * (sp-docs/requirements/member.md §8). 그래서 {@code @RequestBody} 도
+	 * {@code @Valid} 도 없다.
+	 *
+	 * <p><b>계정 상태를 확인하지 않는다.</b> member 는 {@code sp_auth} 를 조회할 수 없고 auth 를
+	 * 호출하지 않는다 (sp-docs/architecture.md §5). 2단계는 1단계에서 쓰던 Access Token 으로
+	 * 수행되며 토큰 서명이 유효하면 통과한다 (sp-docs/requirements/member.md §8).
+	 *
+	 * <p>탈퇴 대상은 검증된 토큰의 {@code sub} 가 정한다 — 경로에 식별자가 없으므로 타인의
+	 * 프로필이 이 경로로 탈퇴될 수 없다 (sp-docs/security.md §4). 토큰 없는 접근은 Security
+	 * 필터 체인이 401 {@code A001} 로 끊는다 (sp-docs/api-contract.md §8.5).
+	 */
+	@DeleteMapping("/me")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public void withdraw(@CurrentMember LoginMember loginMember) {
+		this.memberService.withdraw(loginMember.accountId());
 	}
 
 }

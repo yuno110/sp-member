@@ -2,9 +2,11 @@ package com.example.member.member.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasSize;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -44,7 +46,8 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * <p><b>경로별 인가 행렬은 {@code SecurityConfigTest} 가 본다.</b> 여기서 토큰 없는 접근을 보는
  * 것은 응답 본문과 "저장되지 않았다"·"바뀌지 않았다" 까지 함께 단언하는 경우뿐이다.
  *
- * <p>픽스처의 {@code accountId} 는 M-05 가 211~, <b>M-08 이 251~</b> 을 쓰고, 닉네임은
+ * <p>픽스처의 {@code accountId} 는 M-05 가 211~, M-08 이 251~, <b>M-09 가 281~288</b> 을
+ * 쓰고, 닉네임은
  * {@code 관리자} 가 아닌 값을 쓴다. ADMIN seed 가 {@code (1, '관리자')} 를 넣으므로 겹치면 UNIQUE
  * 위반으로 깨진다 (sp-docs/requirements/member.md §10.1). M-08 의 {@code MemberServiceTest}
  * 픽스처(241~)와도 범위를 겹치지 않게 둔다.
@@ -704,6 +707,191 @@ class MemberControllerTest {
 				.header(HttpHeaders.AUTHORIZATION, bearer(accountId))
 				.contentType(MediaType.APPLICATION_JSON)
 				.content(body);
+	}
+
+	// --- 프로필 탈퇴 (M-09, sp-docs/api-contract.md §3 §3.1) ---
+
+	/**
+	 * 검증표: <b>정상 탈퇴 → 204, {@code deleted = true}, {@code nickname = null}, 행 존재</b>
+	 * (sp-docs/plan/phase1.md §5 M-09).
+	 *
+	 * <p><b>요청에 본문이 없다.</b> 완료 기준 "비밀번호를 받지 않는다" 가 여기서 관측된다 —
+	 * 본문을 요구하는 구현이면 이 요청이 400 이 된다
+	 * (sp-docs/requirements/member.md §8: 재확인은 1단계에서 끝났다).
+	 *
+	 * <p>204 는 본문이 없으므로 응답이 빈 문자열임을 함께 못박는다
+	 * (sp-docs/api-contract.md §3 의 표).
+	 */
+	@Test
+	@DisplayName("정상 탈퇴는 204 이고 본문이 없으며 행은 deleted = true, nickname = NULL 로 남는다")
+	void 정상_탈퇴() throws Exception {
+		this.mockMvc.perform(등록(281L, """
+						{"nickname": "탈퇴하는이"}""")).andExpect(status().isCreated());
+
+		this.mockMvc.perform(탈퇴(281L))
+				.andExpect(status().isNoContent())
+				.andExpect(content().string(""));
+
+		Member withdrawn = this.memberRepository.findByAccountId(281L)
+				.orElseThrow(() -> new AssertionError(
+						"행을 삭제하지 않는다 (sp-docs/domain-model.md §3.1)"));
+		assertThat(withdrawn.isDeleted()).isTrue();
+		assertThat(withdrawn.getNickname())
+				.as("\"탈퇴한 회원\" 은 응답 시 변환이지 저장이 아니다 (sp-docs/domain-model.md §3.1)")
+				.isNull();
+	}
+
+	/**
+	 * 검증표: <b>이미 탈퇴한 프로필에 재호출 → 204 (멱등)</b>
+	 * (sp-docs/api-contract.md §3.1 의 표 — {@code DELETE /me} 는 그 표에서 404 가 아닌 유일한
+	 * {@code /me} 행이고, auth 의 {@code DELETE /accounts/me} 가 같은 예외다, §2.2).
+	 *
+	 * <p>탈퇴한 프로필을 {@code M001} 로 거부하는 구현은 여기서 404 를 내며 붉어진다. 그 결론은
+	 * {@code GET /me}·{@code PATCH /me} 의 것이다.
+	 */
+	@Test
+	@DisplayName("이미 탈퇴한 프로필에 다시 탈퇴하면 204 다")
+	void 이미_탈퇴한_프로필_재호출() throws Exception {
+		this.mockMvc.perform(등록(282L, """
+						{"nickname": "두번탈퇴"}""")).andExpect(status().isCreated());
+		this.mockMvc.perform(탈퇴(282L)).andExpect(status().isNoContent());
+
+		this.mockMvc.perform(탈퇴(282L))
+				.andExpect(status().isNoContent())
+				.andExpect(content().string(""));
+
+		Member again = this.memberRepository.findByAccountId(282L).orElseThrow();
+		assertThat(again.isDeleted()).isTrue();
+		assertThat(again.getNickname()).isNull();
+	}
+
+	/**
+	 * 검증표: <b>두 회원을 연달아 탈퇴 → 둘 다 204. UNIQUE 위반 없음.</b>
+	 *
+	 * <p><b>이 케이스가 무엇을 깨뜨릴 수 있는지</b>: 탈퇴 시 닉네임을 {@code "탈퇴한 회원"} 같은
+	 * 고정 문자열로 <b>저장</b>하는 구현에서는 두 번째 탈퇴가 {@code uk_member_nickname} 을 밟아
+	 * 500 {@code C005} 가 된다 (sp-docs/domain-model.md §3.1). 그래서 두 번째의 204 자체가
+	 * 반증 가능한 단언이다.
+	 *
+	 * <p><b>그것만으로는 "닉네임을 그대로 남기는" 구현을 가르지 못한다</b> — 두 닉네임이 다르므로
+	 * UNIQUE 가 깨지지 않는다. 그 구현은 해방이 일어나지 않는 것으로 드러나므로, 두 행의
+	 * {@code nickname} 이 NULL 임을 함께 단언한다.
+	 */
+	@Test
+	@DisplayName("두 회원을 연달아 탈퇴하면 둘 다 204 이고 UNIQUE 위반이 없다")
+	void 두_회원_연달아_탈퇴() throws Exception {
+		this.mockMvc.perform(등록(283L, """
+						{"nickname": "먼저탈퇴"}""")).andExpect(status().isCreated());
+		this.mockMvc.perform(등록(284L, """
+						{"nickname": "나중탈퇴"}""")).andExpect(status().isCreated());
+
+		this.mockMvc.perform(탈퇴(283L)).andExpect(status().isNoContent());
+		this.mockMvc.perform(탈퇴(284L))
+				// 고정 문자열을 저장하는 구현은 여기서 uk_member_nickname 을 밟는다
+				.andExpect(status().isNoContent());
+
+		Member first = this.memberRepository.findByAccountId(283L).orElseThrow();
+		Member second = this.memberRepository.findByAccountId(284L).orElseThrow();
+		assertThat(first.isDeleted()).isTrue();
+		assertThat(second.isDeleted()).isTrue();
+		assertThat(first.getNickname()).isNull();
+		assertThat(second.getNickname()).isNull();
+	}
+
+	/**
+	 * 검증표: <b>탈퇴 후 {@code GET /members/me} → 404 {@code M001}</b>
+	 * (sp-docs/api-contract.md §3.1 의 표).
+	 *
+	 * <p>M-08 의 같은 결론을 보는 테스트는 엔티티 메서드로 탈퇴 상태를 만든다. 여기서는
+	 * <b>실제 {@code DELETE /me} 경로</b>로 만든 상태를 본다 — 탈퇴 경로가 만드는 상태와 조회가
+	 * 거부하는 상태가 같은 것임을 잇는 자리다.
+	 */
+	@Test
+	@DisplayName("DELETE /me 로 탈퇴한 뒤 GET /me 는 404 M001 이다")
+	void 탈퇴_후_내_프로필_조회() throws Exception {
+		this.mockMvc.perform(등록(285L, """
+						{"nickname": "조회못한다"}""")).andExpect(status().isCreated());
+		this.mockMvc.perform(내_프로필(285L))
+				// 탈퇴 전에는 조회된다 — 늘 404 인 구현과 가른다
+				.andExpect(status().isOk());
+
+		this.mockMvc.perform(탈퇴(285L)).andExpect(status().isNoContent());
+
+		this.mockMvc.perform(내_프로필(285L))
+				.andExpect(status().isNotFound())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.error.code").value("M001"))
+				.andExpect(jsonPath("$.error.message").value("프로필을 찾을 수 없습니다."));
+	}
+
+	/**
+	 * 검증표: <b>탈퇴 후 {@code POST /members} 재시도 → 409 {@code M007}</b>
+	 * (sp-docs/api-contract.md §3 의 표). 행이 남아 있고 {@code uk_member_account_id} 가 재생성을
+	 * 막는다는 것을 HTTP 경로로 확인하는 자리다 (sp-docs/domain-model.md §3.1).
+	 *
+	 * <p>탈퇴한 행은 {@code nickname} 이 NULL 이므로 <b>같은 닉네임으로 재시도해도</b> 결론은
+	 * {@code M007} 이다 — 닉네임 비교가 먼저 오면 {@code M006} 이 나간다.
+	 */
+	@Test
+	@DisplayName("DELETE /me 로 탈퇴한 뒤 POST /members 재시도는 409 M007 이다")
+	void 탈퇴_후_재등록() throws Exception {
+		this.mockMvc.perform(등록(286L, """
+						{"nickname": "재등록불가"}""")).andExpect(status().isCreated());
+		this.mockMvc.perform(탈퇴(286L)).andExpect(status().isNoContent());
+
+		this.mockMvc.perform(등록(286L, """
+						{"nickname": "재등록불가"}"""))
+				.andExpect(status().isConflict())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.error.code").value("M007"))
+				.andExpect(jsonPath("$.error.message").value("탈퇴한 프로필입니다."));
+
+		Member stale = this.memberRepository.findByAccountId(286L).orElseThrow();
+		assertThat(stale.isDeleted())
+				.as("행이 되살아나지 않는다")
+				.isTrue();
+		assertThat(stale.getNickname()).isNull();
+	}
+
+	/**
+	 * 검증표: <b>탈퇴 후 해방된 닉네임으로 타인이 등록 → 201.</b>
+	 *
+	 * <p>M-08 의 같은 결론을 보는 테스트는 엔티티 메서드로 탈퇴 상태를 만들고 중복 확인까지만
+	 * 본다. 여기서는 <b>실제 {@code DELETE /me} 경로</b>로 비운 뒤 다른 계정이 그 값으로
+	 * <b>실제 등록까지</b> 한다 — 해방은 {@code uk_member_nickname} 이 걸린 INSERT 가 통과해야
+	 * 참이다.
+	 *
+	 * <p>탈퇴 전에 그 닉네임이 409 {@code M003} 으로 막힘을 먼저 본다. 그러지 않으면 닉네임을
+	 * 애초에 저장하지 않는 구현도 통과한다 (sp-docs/api-contract.md §2.3).
+	 */
+	@Test
+	@DisplayName("DELETE /me 로 해방된 닉네임을 다른 계정이 등록하면 201 이다")
+	void 탈퇴로_해방된_닉네임_타인_등록() throws Exception {
+		this.mockMvc.perform(등록(287L, """
+						{"nickname": "물려주는닉"}""")).andExpect(status().isCreated());
+		this.mockMvc.perform(등록(288L, """
+						{"nickname": "물려주는닉"}"""))
+				// 탈퇴 전에는 선점되어 있다 — 닉네임을 저장하지 않는 구현과 가른다
+				.andExpect(status().isConflict())
+				.andExpect(jsonPath("$.error.code").value("M003"));
+
+		this.mockMvc.perform(탈퇴(287L)).andExpect(status().isNoContent());
+
+		this.mockMvc.perform(등록(288L, """
+						{"nickname": "물려주는닉"}"""))
+				.andExpect(status().isCreated())
+				.andExpect(jsonPath("$.data.accountId").value(288))
+				.andExpect(jsonPath("$.data.nickname").value("물려주는닉"));
+
+		assertThat(this.memberRepository.findByAccountId(287L).orElseThrow().getNickname())
+				.as("물려준 쪽은 NULL 로 남는다")
+				.isNull();
+	}
+
+	private static MockHttpServletRequestBuilder 탈퇴(long accountId) {
+		// 본문을 실지 않는다 — 비밀번호를 포함해 아무것도 받지 않는다
+		// (sp-docs/requirements/member.md §8)
+		return delete(ME_PATH).header(HttpHeaders.AUTHORIZATION, bearer(accountId));
 	}
 
 	private static String bearer(long accountId) {

@@ -46,8 +46,10 @@ public class MemberService {
 	 * 내 프로필을 읽는 지점. <b>없으면 {@code M001} 을 던진다</b> — 그 결론이 {@link MemberReader}
 	 * 에 있다.
 	 *
-	 * <p><b>탈퇴 여부는 거기서 보지 않는다.</b> 상태별 결론은 호출하는 쪽이 정하므로
-	 * {@link #myActiveProfile} 이 탈퇴를 가른다.
+	 * <p><b>탈퇴 여부는 거기서 보지 않는다.</b> 상태별 결론은 호출하는 쪽이 정한다 —
+	 * {@code GET /me}·{@code PATCH /me} 는 {@link #myActiveProfile} 이 {@code M001} 로 가르고,
+	 * {@code DELETE /me} 는 {@link #withdraw} 가 <b>멱등</b>으로 가른다
+	 * (sp-docs/api-contract.md §3.1 의 표).
 	 */
 	private final MemberReader memberReader;
 
@@ -287,6 +289,57 @@ public class MemberService {
 		}
 
 		return MemberResponse.from(profile);
+	}
+
+	/**
+	 * MR-10 의 2단계 — 프로필 탈퇴 (sp-docs/requirements/member.md §8,
+	 * sp-docs/architecture.md §4.4). {@link Member#withdraw()} 가 {@code deleted = true} 와
+	 * {@code nickname = NULL} 을 함께 만든다. <b>행을 삭제하지 않는다</b> —
+	 * {@code uk_member_account_id} 가 남아 탈퇴한 계정의 프로필 재생성을 막는다
+	 * (sp-docs/domain-model.md §3.1).
+	 *
+	 * <p><b>멱등이다. 이미 탈퇴한 프로필에 다시 호출해도 아무것도 바꾸지 않고 정상 반환한다</b>
+	 * — sp-docs/api-contract.md §3.1 의 표에서 {@code DELETE /me} 는 404 가 아닌 유일한
+	 * {@code /me} 행이고(204), 멱등은 요구사항이다 (sp-docs/requirements/member.md §8 "둘 다
+	 * 멱등이다"). auth 의 {@code DELETE /accounts/me} 가 같은 예외다 (§2.2).
+	 *
+	 * <p><b>그래서 {@link #myActiveProfile} 을 쓰지 않는다.</b> 그쪽은 탈퇴를 {@code M001} 로
+	 * 바꾸는데, 그 결론은 {@code GET /me}·{@code PATCH /me} 의 것이고 여기에 쓰면 멱등이 깨진다.
+	 * 대신 {@link MemberReader} 를 직접 불러 상태별 결론을 이 자리에서 낸다.
+	 *
+	 * <p><b>프로필 행이 아예 없으면 {@code M001} 이다.</b> 멱등의 대상은 "이미 탈퇴" 까지다 —
+	 * sp-docs/api-contract.md §3.1 의 탈퇴 상태 표가 {@code DELETE /me} 에 "프로필이 아예 없음 →
+	 * 404 {@code M001}, 멱등의 대상이 아니다" 행을 둔다.
+	 *
+	 * <p><b>그 결론의 출처는 §2.2 다.</b> 위 행이 들어오기 전에는 §3.1 이 {@code DELETE /me} 에
+	 * "탈퇴한 프로필 → 204" 만 주었고, 같은 표가 그것을 auth 의 {@code DELETE /accounts/me} 와
+	 * "같다" 고 적었다. 그쪽 상세표(§2.2)는 "행이 없음 → 404 {@code AU001}. 멱등의 대상이 아니다"
+	 * 로 가르므로 그것을 따랐고, §3.1 의 행도 그 근거를 가리킨다 — <b>auth 가 §2.2 에서 같은
+	 * 결론을 냈다</b>.
+	 *
+	 * <p><b>비밀번호를 받지 않는다.</b> member 는 비밀번호를 갖지 않으며 재확인은 1단계
+	 * ({@code DELETE /api/v1/accounts/me})에서 끝났다 (sp-docs/requirements/member.md §8).
+	 *
+	 * <p><b>계정 상태를 확인하지 않고 auth 를 호출하지 않는다.</b> member 는 {@code sp_auth} 를
+	 * 조회할 수 없고 호출 방향은 {@code board -> member} 하나뿐이다
+	 * (sp-docs/architecture.md §5). 토큰 서명이 유효하면 진행한다.
+	 *
+	 * <p>닉네임을 비우므로 {@code uk_member_nickname} 을 깨뜨릴 수 없다 — NULL 은 UNIQUE 에
+	 * 걸리지 않는다. 그래서 등록·수정 경로와 달리 제약 위반을 가르는 분기가 없다. 반대로 값을
+	 * 남기거나 {@code "탈퇴한 회원"} 으로 <b>저장</b>하면 그 닉네임이 영구 소각되고 두 번째
+	 * 탈퇴가 UNIQUE 위반으로 500 이 된다 (sp-docs/domain-model.md §3.1).
+	 *
+	 * @param accountId 검증된 JWT 의 {@code sub}. 경로에 식별자가 없으므로 타인의 프로필이 이
+	 *         경로로 탈퇴될 수 없다 (sp-docs/security.md §4)
+	 */
+	@Transactional
+	public void withdraw(Long accountId) {
+		Member profile = this.memberReader.getByAccountId(accountId);
+		if (profile.isDeleted()) {
+			// 멱등 — 아무것도 바꾸지 않는다 (sp-docs/api-contract.md §3.1)
+			return;
+		}
+		profile.withdraw();
 	}
 
 	/**

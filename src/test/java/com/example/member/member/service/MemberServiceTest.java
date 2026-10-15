@@ -42,7 +42,8 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
  * 행을 봐야 확인되고, 닉네임 해방은 {@code uk_member_nickname} 이 걸린 실제 테이블에서만
  * 의미가 있다.
  *
- * <p>픽스처의 {@code accountId} 는 M-05 가 201~, <b>M-08 이 241~249 · 263~267 · 271~272</b> 를
+ * <p>픽스처의 {@code accountId} 는 M-05 가 201~, <b>M-08 이 241~249 · 263~267 · 271~272</b>
+ * 쓰고 <b>M-09 가 273~275</b> 를
  * 쓰고, 닉네임은
  * {@code 관리자} 가 아닌 값을 쓴다. ADMIN seed 가 {@code (1, '관리자')} 를 넣으므로 겹치면 UNIQUE
  * 위반으로 깨진다 (sp-docs/requirements/member.md §10.1). M-03 의 픽스처(101~)·M-05 의
@@ -810,6 +811,107 @@ class MemberServiceTest {
 			}).given(this.spyMemberRepository).existsByNicknameAndAccountIdNot(anyString(), anyLong());
 		}
 
+	}
+
+	// --- 프로필 탈퇴 (M-09, sp-docs/requirements/member.md §8) ---
+
+	/**
+	 * 검증표: <b>정상 탈퇴 — {@code deleted = true}, {@code nickname = null}, 행은 살아있다</b>
+	 * (sp-docs/plan/phase1.md §5 M-09). HTTP 204 는
+	 * {@link com.example.member.member.controller.MemberControllerTest} 가 본다.
+	 *
+	 * <p><b>셋을 한 자리에서 단언하는 이유가 서로 다르다.</b>
+	 *
+	 * <ul>
+	 * <li>행이 살아있다 — {@code delete()} 로 지우는 구현을 가른다. 행이 사라지면
+	 * {@code uk_member_account_id} 가 나가고 탈퇴한 계정의 프로필이 재생성된다
+	 * (sp-docs/domain-model.md §3.1)
+	 * <li>{@code deleted} — 닉네임만 비우고 상태를 옮기지 않는 구현을 가른다
+	 * <li>{@code nickname} 이 NULL — 값을 남기거나 {@code "탈퇴한 회원"} 으로 <b>저장</b>하는
+	 * 구현을 가른다. 마스킹은 응답 시 변환이지 저장이 아니므로 리터럴로 직접 단언한다
+	 * (sp-docs/api-contract.md §3.1)
+	 * </ul>
+	 *
+	 * <p><b>탈퇴 전 상태를 먼저 본다.</b> 그러지 않으면 등록이 이미 탈퇴 상태를 만드는 구현도
+	 * 통과한다.
+	 */
+	@Test
+	@DisplayName("탈퇴하면 deleted 가 true, nickname 이 NULL 이 되고 행은 남는다")
+	void 정상_탈퇴() {
+		this.memberService.register(273L, request("탈퇴할사람"));
+		Member before = this.memberRepository.findByAccountId(273L).orElseThrow();
+		assertThat(before.isDeleted())
+				.as("탈퇴 전에는 활성이다 — 등록이 이미 탈퇴 상태를 만드는 구현과 가른다")
+				.isFalse();
+		assertThat(before.getNickname()).isEqualTo("탈퇴할사람");
+
+		this.memberService.withdraw(273L);
+
+		Member withdrawn = this.memberRepository.findByAccountId(273L)
+				.orElseThrow(() -> new AssertionError(
+						"행을 삭제하지 않는다 (sp-docs/domain-model.md §3.1)"));
+		assertThat(withdrawn.isDeleted()).isTrue();
+		assertThat(withdrawn.getNickname())
+				.as("값을 남기거나 \"탈퇴한 회원\" 으로 저장하지 않는다 (sp-docs/domain-model.md §3.1)")
+				.isNull();
+	}
+
+	/**
+	 * 검증표: <b>이미 탈퇴한 프로필에 재호출해도 정상이다 — 멱등</b>
+	 * (sp-docs/api-contract.md §3.1 의 표에서 {@code DELETE /me} 는 404 가 아닌 유일한
+	 * {@code /me} 행이다, sp-docs/requirements/member.md §8 "둘 다 멱등이다").
+	 *
+	 * <p><b>{@code myActiveProfile} 을 쓴 구현은 여기서 붉어진다</b> — 그쪽은 탈퇴를
+	 * {@code M001} 로 바꾸고, 그 결론은 {@code GET /me}·{@code PATCH /me} 의 것이다.
+	 *
+	 * <p>함께 <b>아무것도 바꾸지 않았음</b>을 본다 — 같은 행이 같은 상태로 남는다.
+	 * {@code updated_at} 은 보지 않는다. {@code member} 에는 탈퇴 시각 컬럼이 없고
+	 * (sp-docs/domain-model.md §3.1) 탈퇴한 행이 쥔 상태는 {@code deleted}·{@code nickname}
+	 * 둘이다.
+	 */
+	@Test
+	@DisplayName("이미 탈퇴한 프로필에 다시 탈퇴해도 예외가 없고 상태가 그대로다")
+	void 이미_탈퇴한_프로필_재호출() {
+		this.memberService.register(274L, request("단단한멱등"));
+		this.memberService.withdraw(274L);
+		Long rowId = this.memberRepository.findByAccountId(274L).orElseThrow().getId();
+
+		this.memberService.withdraw(274L);
+
+		Member again = this.memberRepository.findByAccountId(274L).orElseThrow();
+		assertThat(again.getId())
+				.as("새 행을 만들지 않는다")
+				.isEqualTo(rowId);
+		assertThat(again.isDeleted()).isTrue();
+		assertThat(again.getNickname()).isNull();
+	}
+
+	/**
+	 * <b>프로필 행이 아예 없는 계정의 탈퇴는 {@code M001} 이다.</b>
+	 *
+	 * <p><b>정본이 이 경우를 가른다.</b> sp-docs/api-contract.md §3.1 의 탈퇴 상태 표에
+	 * {@code DELETE /me} 의 <b>"프로필이 아예 없음 → 404 {@code M001}. 멱등의 대상이 아니다"</b>
+	 * 행이 있다. 멱등의 범위는 "이미 탈퇴" 까지다.
+	 *
+	 * <p><b>그 결론은 auth 의 {@code DELETE /accounts/me} 에서 왔다.</b> 위 행이 들어오기 전
+	 * §3.1 은 {@code DELETE /me} 에 "탈퇴한 프로필 → 204" 만 주면서 그것을 auth 쪽과 "같다" 고
+	 * 적었고, 그쪽 상세표(§2.2)는 <b>"행이 없음 → 404 {@code AU001}. 멱등의 대상이 아니다"</b> 로
+	 * 가른다 — 그것을 따랐다. §3.1 의 행도 같은 근거를 가리킨다.
+	 *
+	 * <p>이 단언은 <b>발생 가능한 반대 해석을 가른다</b> — "멱등이니 무어든 204" 로 둔 구현(행이
+	 * 없으면 조용히 반환)에서 붉어진다.
+	 */
+	@Test
+	@DisplayName("프로필 없는 계정으로 탈퇴하면 M001 이다")
+	void 프로필_없는_계정_탈퇴() {
+		assertThatThrownBy(() -> this.memberService.withdraw(275L))
+				.isInstanceOf(BusinessException.class)
+				.extracting(e -> ((BusinessException) e).getErrorCode())
+				.isEqualTo(ErrorCode.MEMBER_NOT_FOUND);
+
+		assertThat(this.memberRepository.findByAccountId(275L))
+				.as("없는 계정에 탈퇴 행을 만들지 않는다")
+				.isEmpty();
 	}
 
 	/** 실제 탈퇴 경로는 M-09 다. 지금은 엔티티 메서드로 같은 상태를 만든다. */
