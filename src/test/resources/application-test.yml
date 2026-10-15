@@ -28,3 +28,9 @@ cors:
 # 로딩이 그 파일을 읽는 것까지 확인된다. 짝이 되는 개인키가 없어 토큰을 서명할 수 없으므로,
 # 서명이 필요한 테스트만 실행 시점에 만든 키 페어로 이 값을 덮는다
 # (com.example.member.support.TestTokenFactory)
+
+# 테스트 전용 내부 API 키다. 실제 키가 아니다 — 로컬·운영 값은 환경이 준다
+# (application.yml 의 member-service.internal-api-key 주석, sp-docs/tech-stack.md §4.3).
+# 값이 없으면 SecurityConfig 의 /internal/** 체인 생성이 실패해 컨텍스트가 뜨지 않는다.
+member-service:
+  internal-api-key: test-internal-api-key

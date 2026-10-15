@@ -35,6 +35,13 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Member extends BaseTimeEntity {
 
+	/**
+	 * 탈퇴한 프로필의 표시 이름. 정본: sp-docs/api-contract.md §3.1 §5.
+	 *
+	 * <p><b>저장되는 값이 아니다</b> ({@link #displayNickname()}).
+	 */
+	private static final String WITHDRAWN_NICKNAME = "탈퇴한 회원";
+
 	@Id
 	@GeneratedValue(strategy = GenerationType.IDENTITY)
 	private Long id;
@@ -82,6 +89,24 @@ public class Member extends BaseTimeEntity {
 	/** {@code deleted} 의 반대를 읽는다. */
 	public boolean isActive() {
 		return !this.deleted;
+	}
+
+	/**
+	 * 응답에 실을 표시 이름. 탈퇴했으면 {@code "탈퇴한 회원"} 이다.
+	 *
+	 * <p><b>응답 시 변환이지 저장이 아니다.</b> 저장값은 NULL 이다 ({@link #withdraw()}) —
+	 * 마스킹 문자열을 저장하면 {@code uk_member_nickname} 때문에 두 번째 탈퇴가 UNIQUE 위반으로
+	 * 500 이 난다 (sp-docs/domain-model.md §3.1).
+	 *
+	 * <p><b>마스킹 규칙은 하나다.</b> 공개 조회({@code GET /api/v1/members/{accountId}})와 내부
+	 * 벌크 API 가 같은 변환을 쓰며, 두 군데서 다르게 변환하지 않는다
+	 * (sp-docs/api-contract.md §3.1 §5). 그래서 변환을 각 DTO 에 복제하지 않고 이 메서드에 둔다.
+	 *
+	 * <p>활성 프로필에서는 {@code nickname} 이 NOT NULL 이 아니라 "탈퇴 전이므로 값이 있다" 는
+	 * 상태 불변식에 의존한다 — 컬럼은 NULL 을 허용하고 비우는 지점은 {@link #withdraw()} 뿐이다.
+	 */
+	public String displayNickname() {
+		return this.deleted ? WITHDRAWN_NICKNAME : this.nickname;
 	}
 
 	@Override

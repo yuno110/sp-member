@@ -15,6 +15,7 @@ import com.example.member.member.repository.MemberRepository;
 import com.example.member.support.TestTokenFactory;
 import com.jayway.jsonpath.JsonPath;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -896,6 +897,165 @@ class MemberControllerTest {
 
 	private static String bearer(long accountId) {
 		return "Bearer " + TestTokenFactory.accessToken(accountId, "USER");
+	}
+
+	// --- 공개 프로필 조회 (M-10, sp-docs/api-contract.md §3 §3.1) ---
+
+	/**
+	 * 검증표: <b>프로필 조회 → 200, 키가 {@code accountId}·{@code nickname}·{@code createdAt}·
+	 * {@code deleted}. {@code email} 없음</b> (sp-docs/api-contract.md §3.1).
+	 *
+	 * <p><b>무엇을 깨뜨릴 수 있는지</b>: {@code MemberResponse} 를 그대로 재사용한 구현은
+	 * {@code createdAt}·{@code deleted} 가 없어 키 집합 단언이 빨개진다. 반대로
+	 * {@code MemberResponse} 를 늘려 쓴 구현은 {@code GET /me} 쪽 키 집합 단언(위의
+	 * {@code 응답_키_집합})이 빨개진다 — 두 조회가 다른 모양인 것이 계약이다.
+	 *
+	 * <p><b>키마다 {@code doesNotExist} 를 쓰지 않는다.</b> 집합 자체를 단언하면 새로 늘어난 키도
+	 * 잡힌다.
+	 *
+	 * <p><b>{@code createdAt} 을 고정 패턴으로 못박지 않는다.</b> 소수부는 저장값에 따르므로
+	 * 운영 MySQL {@code DATETIME} 은 초 단위고 테스트 H2 는 마이크로초까지 있다
+	 * (sp-docs/tech-stack.md §6). 그래서 <b>소수부를 선택으로 둔 정규식</b>으로 계약(오프셋 없는
+	 * ISO-8601 지역시각)을 보고, 값 자체는 <b>DB 에 저장된 {@code member.created_at} 과 같은지</b>로
+	 * 본다 — 그것이 완료 기준 "그 {@code createdAt} 은 {@code member.created_at} 이다" 가 요구하는
+	 * 것이고, 응답에 {@code updated_at} 이나 현재 시각을 실은 구현을 가른다.
+	 */
+	@Test
+	@DisplayName("공개 프로필 조회는 200 이고 키가 accountId·nickname·createdAt·deleted 정확히 넷이다")
+	void 공개_프로필_조회() throws Exception {
+		this.mockMvc.perform(등록(291L, """
+						{"nickname": "공개조회대상"}""")).andExpect(status().isCreated());
+
+		String 본문 = this.mockMvc.perform(get(PATH + "/291"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.success").value(true))
+				.andExpect(jsonPath("$.data.accountId").value(291))
+				.andExpect(jsonPath("$.data.nickname").value("공개조회대상"))
+				.andExpect(jsonPath("$.data.deleted").value(false))
+				.andExpect(jsonPath("$.error").doesNotExist())
+				.andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+		assertThat(JsonPath.<Map<String, Object>>read(본문, "$.data"))
+				.as("GET /members/{accountId} 는 네 키다 — email 도 member.id 도 없다 "
+						+ "(sp-docs/api-contract.md §3.1)")
+				.containsOnlyKeys("accountId", "nickname", "createdAt", "deleted");
+
+		String createdAt = JsonPath.read(본문, "$.data.createdAt");
+		assertThat(createdAt)
+				.as("오프셋을 표기하지 않고 소수부는 저장값에 따른다 (sp-docs/tech-stack.md §6)")
+				.matches("\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?");
+		assertThat(LocalDateTime.parse(createdAt))
+				.as("member.created_at(프로필 등록 시각)이다. account.created_at 도 updated_at 도 "
+						+ "아니다 (sp-docs/api-contract.md §3.1)")
+				.isEqualTo(this.memberRepository.findByAccountId(291L).orElseThrow().getCreatedAt());
+	}
+
+	/**
+	 * 검증표: <b>탈퇴한 프로필 공개 조회 → 200, {@code nickname = "탈퇴한 회원"},
+	 * {@code deleted: true}</b> (sp-docs/api-contract.md §3.1 의 탈퇴 상태 표). 그리고 <b>탈퇴
+	 * 프로필의 DB 값은 {@code nickname IS NULL}</b> 이다 (sp-docs/domain-model.md §3.1).
+	 *
+	 * <p><b>무엇을 깨뜨릴 수 있는지</b>: 탈퇴를 "없음" 으로 보는 구현(예: 탈퇴 검사를
+	 * {@code MemberReader} 로 올리거나 이 경로에서 {@code M001} 을 내는 구현)은 404 로 빨개진다 —
+	 * 글이 남아 있으므로 표시할 것이 있고, 404 를 주면 클라이언트가 정상적으로 존재하는 글에
+	 * 오류를 띄운다. 마스킹을 <b>저장</b>으로 바꾼 구현은 DB 단언에서 빨개진다.
+	 *
+	 * <p>탈퇴 전에 실제 닉네임이 나오는 것을 먼저 본다 — 늘 {@code "탈퇴한 회원"} 을 돌려주는
+	 * 구현과 가른다.
+	 */
+	@Test
+	@DisplayName("탈퇴한 프로필의 공개 조회는 200 에 \"탈퇴한 회원\"·deleted true 이고 DB 는 NULL 이다")
+	void 탈퇴한_프로필_공개_조회() throws Exception {
+		this.mockMvc.perform(등록(292L, """
+						{"nickname": "탈퇴전닉네임"}""")).andExpect(status().isCreated());
+		this.mockMvc.perform(get(PATH + "/292"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.nickname").value("탈퇴전닉네임"))
+				.andExpect(jsonPath("$.data.deleted").value(false));
+
+		this.mockMvc.perform(탈퇴(292L)).andExpect(status().isNoContent());
+
+		this.mockMvc.perform(get(PATH + "/292"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.success").value(true))
+				.andExpect(jsonPath("$.data.accountId").value(292))
+				.andExpect(jsonPath("$.data.nickname").value("탈퇴한 회원"))
+				.andExpect(jsonPath("$.data.deleted").value(true))
+				.andExpect(jsonPath("$.error").doesNotExist());
+
+		Map<String, Object> row =
+				this.jdbcTemplate.queryForMap("select * from member where account_id = ?", 292L);
+		assertThat(row.get("nickname"))
+				.as("\"탈퇴한 회원\" 은 응답 시 변환이지 저장이 아니다 (sp-docs/domain-model.md §3.1)")
+				.isNull();
+	}
+
+	/**
+	 * 검증표: <b>프로필이 없는 {@code accountId} → 404 {@code M001}</b>
+	 * (sp-docs/api-contract.md §3.1 의 표).
+	 *
+	 * <p><b>이 404 는 공개 조회까지다.</b> §5.1 이 금지한 것은 내부 API 에서 404 를 업무 의미로
+	 * 쓰는 것이고, 이 경로는 클라이언트를 상대하므로 404 가 맞다 — 두 경로를 같게 맞추지 않는다.
+	 * 내부 API 쪽 결론은 {@code InternalMemberControllerTest} 가 본다.
+	 *
+	 * <p><b>무엇을 깨뜨릴 수 있는지</b>: 없는 {@code accountId} 에 200 과 빈 본문·빈 닉네임을
+	 * 돌려주는 구현(내부 API 의 "제외" 규칙을 이쪽에도 적용한 구현)은 여기서 빨개진다.
+	 */
+	@Test
+	@DisplayName("프로필이 없는 accountId 의 공개 조회는 404 M001 이다")
+	void 프로필이_없는_accountId_공개_조회() throws Exception {
+		assertThat(this.memberRepository.findByAccountId(293L))
+				.as("이 accountId 로는 등록하지 않았다")
+				.isEmpty();
+
+		this.mockMvc.perform(get(PATH + "/293"))
+				.andExpect(status().isNotFound())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.error.code").value("M001"))
+				.andExpect(jsonPath("$.error.message").value("프로필을 찾을 수 없습니다."))
+				.andExpect(jsonPath("$.data").doesNotExist());
+	}
+
+	/**
+	 * 완료 기준·검증표: <b>{@code GET /members/me} 가 {@code GET /members/{accountId}} 보다 먼저
+	 * 매칭된다</b> (sp-docs/plan/phase1.md §5 M-10).
+	 *
+	 * <p>{@code PathPattern} 은 리터럴 세그먼트를 변수보다 구체적으로 보지만 <b>그 동작에 기대고
+	 * 끝내지 않는다</b> — {@code me} 가 {@code accountId} 로 해석되면 숫자 파싱이 실패해 엉뚱한
+	 * 오류가 난다.
+	 *
+	 * <p><b>무엇으로 가르나.</b> 두 핸들러의 <b>응답 모양이 다르다</b>
+	 * (sp-docs/api-contract.md §3.1) — {@code /me} 는 두 키고 {@code /{accountId}} 는 네 키다.
+	 * 그래서 키 집합이 "어느 핸들러가 받았는가" 를 말해 준다. 상태 코드만 보면 두 경로가 모두
+	 * 200 일 수 있어 가르지 못한다.
+	 *
+	 * <p>같은 계정으로 두 경로를 함께 호출한다 — 두 매핑이 동시에 살아 있고 서로를 가리지 않음을
+	 * 한 테스트에서 본다.
+	 */
+	@Test
+	@DisplayName("GET /members/me 는 {accountId} 매핑에 먹히지 않고 내 프로필을 돌려준다")
+	void me_가_accountId_보다_먼저_매칭된다() throws Exception {
+		this.mockMvc.perform(등록(294L, """
+						{"nickname": "라우팅확인"}""")).andExpect(status().isCreated());
+
+		String me = this.mockMvc.perform(내_프로필(294L))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.accountId").value(294))
+				.andExpect(jsonPath("$.data.nickname").value("라우팅확인"))
+				.andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+		assertThat(JsonPath.<Map<String, Object>>read(me, "$.data"))
+				.as("/me 핸들러가 받았다 — {accountId} 핸들러가 받았다면 네 키다 "
+						+ "(sp-docs/api-contract.md §3.1)")
+				.containsOnlyKeys("accountId", "nickname");
+
+		String 공개 = this.mockMvc.perform(get(PATH + "/294"))
+				.andExpect(status().isOk())
+				.andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+		assertThat(JsonPath.<Map<String, Object>>read(공개, "$.data"))
+				.as("같은 계정의 공개 조회는 네 키다 — 두 매핑이 함께 살아 있다")
+				.containsOnlyKeys("accountId", "nickname", "createdAt", "deleted");
 	}
 
 	/** 실제 탈퇴 경로는 M-09 다. 지금은 엔티티 메서드로 같은 상태를 만든다. */

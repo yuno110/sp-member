@@ -1,6 +1,8 @@
 package com.example.member.member.repository;
 
 import com.example.member.member.entity.Member;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -15,6 +17,21 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
 	 * (sp-docs/requirements/member.md §3 규칙 6).
 	 */
 	Optional<Member> findByAccountId(Long accountId);
+
+	/**
+	 * 내부 벌크 조회가 쓴다 ({@code POST /internal/v1/members/bulk},
+	 * sp-docs/api-contract.md §5).
+	 *
+	 * <p><b>존재하지 않는 {@code accountId} 는 결과에서 빠진다.</b> {@code IN} 조회가 그 자체로
+	 * 그렇게 동작하므로 "없음" 을 404 로 바꾸는 분기를 두지 않는다 — board 가 404 를 "프로필
+	 * 없음" 으로 해석하면 경로 오설정이 업무 오류로 위장된다 (§5.1).
+	 *
+	 * <p><b>{@code deleted} 를 조건에 넣지 않는다.</b> 탈퇴한 프로필도 {@code deleted: true} 와
+	 * 닉네임 {@code "탈퇴한 회원"} 으로 <b>반환해야 한다</b> (§5) — 조건에 넣으면 탈퇴가 미등록과
+	 * 구별되지 않아 board 가 두 상태를 같게 본다 (§5.1 은 둘에 같은 403 {@code S002} 를 주지만
+	 * 그것은 board 의 결론이고 member 가 미리 합치는 것이 아니다).
+	 */
+	List<Member> findByAccountIdIn(Collection<Long> accountIds);
 
 	/**
 	 * 닉네임 선점 여부. {@code GET /members/check-nickname} 과 프로필 등록의 {@code M003}

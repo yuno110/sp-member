@@ -1,5 +1,6 @@
 package com.example.member.global.config;
 
+import com.example.member.global.security.InternalApiKeyFilter;
 import com.example.member.global.security.RoleClaimConverter;
 import com.example.member.global.security.SecurityErrorResponder;
 import java.util.List;
@@ -16,6 +17,7 @@ import org.springframework.security.config.annotation.web.configurers.RequestCac
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -49,12 +51,26 @@ public class SecurityConfig {
 	 * {@code A002} 로 나가거나 호출 측의 낡은 토큰이 내부 호출을 실패시킨다 — 정본이 금지한
 	 * "키 거부를 업무 오류로 보이게 하는" 상황이다 (§6).
 	 *
-	 * <p><b>{@code X-Internal-Api-Key} 검증 필터는 M-10 이 이 체인에 등록한다</b>
-	 * (sp-docs/plan/phase1.md §5 M-10). 그때까지 이 경로에는 컨트롤러도 없다.
+	 * <p><b>{@code X-Internal-Api-Key} 검증 필터를 M-10 이 이 체인에 등록했다</b>
+	 * ({@link InternalApiKeyFilter}, sp-docs/security.md §6). 체인 구조는 그대로다 — 인가는
+	 * {@code permitAll} 이고 접근 통제는 그 필터가 한다.
+	 *
+	 * <p><b>필터를 빈으로 두지 않고 여기서 만든다.</b> {@code Filter} 타입 빈은 Boot 가 서블릿
+	 * 컨테이너에 자동 등록하므로 {@code /api/v1/**} 까지 지나게 된다.
+	 *
+	 * <p>{@code AuthorizationFilter} 앞에 끼운다 — 인가 단계 전에 끊어 컨트롤러에 닿지 않게
+	 * 한다.
+	 *
+	 * @param internalApiKey 비밀 값이므로 <b>기본값이 없다</b> (sp-docs/tech-stack.md §4.3).
+	 *         환경변수가 없으면 {@code @Value} 가 placeholder 를 해석하지 못해 이 빈 생성이
+	 *         실패하고 기동이 멈춘다. 빈 값으로 설정된 경우는 {@link InternalApiKeyFilter} 의
+	 *         생성자 가드가 막는다
 	 */
 	@Bean
 	@Order(1)
-	public SecurityFilterChain internalApiFilterChain(HttpSecurity http) throws Exception {
+	public SecurityFilterChain internalApiFilterChain(
+			HttpSecurity http,
+			@Value("${member-service.internal-api-key}") String internalApiKey) throws Exception {
 
 		http
 				.securityMatcher("/internal/**")
@@ -64,7 +80,10 @@ public class SecurityConfig {
 						.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 				.requestCache(RequestCacheConfigurer::disable)
 				// CORS 를 붙이지 않는다. 내부 API 는 브라우저가 호출하지 않는다 (§6)
-				.authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
+				.authorizeHttpRequests(auth -> auth.anyRequest().permitAll())
+				.addFilterBefore(
+						new InternalApiKeyFilter(internalApiKey, this.securityErrorResponder),
+						AuthorizationFilter.class);
 
 		return http.build();
 	}

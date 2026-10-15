@@ -4,6 +4,7 @@ import com.example.member.global.common.ApiResponse;
 import com.example.member.global.security.CurrentMember;
 import com.example.member.global.security.LoginMember;
 import com.example.member.member.dto.CheckResponse;
+import com.example.member.member.dto.MemberProfileResponse;
 import com.example.member.member.dto.MemberResponse;
 import com.example.member.member.dto.NicknameUpdateRequest;
 import com.example.member.member.dto.ProfileCreateRequest;
@@ -17,6 +18,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -166,6 +168,33 @@ public class MemberController {
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public void withdraw(@CurrentMember LoginMember loginMember) {
 		this.memberService.withdraw(loginMember.accountId());
+	}
+
+	/**
+	 * MR-11 — 특정 회원 프로필 조회. 200 과
+	 * {@code {accountId, nickname, createdAt, deleted}} 이고 <b>무인증</b>이다
+	 * (sp-docs/api-contract.md §3 의 "인증" 열, §3.1).
+	 *
+	 * <p><b>경로 변수가 {@code accountId} 다.</b> {@code member.id} 를 외부에 노출하지 않는다
+	 * (§3, sp-docs/domain-model.md §3.1).
+	 *
+	 * <p><b>{@code GET /me} 가 이 매핑보다 먼저 매칭돼야 한다.</b> {@code me} 가 경로 변수로
+	 * 먹히면 숫자 파싱이 실패해 엉뚱한 오류가 난다. 리터럴 세그먼트가 변수보다 구체적이라는
+	 * {@code PathPattern} 의 우선순위가 그것을 정하지만 <b>그 동작에 기대고 끝내지 않고</b>
+	 * {@code MemberControllerTest} 가 두 경로를 함께 보는 테스트로 고정한다. 인가 쪽 선언 순서는
+	 * {@code SecurityConfig} 와 {@code SecurityConfigTest} 가 따로 고정한다.
+	 *
+	 * <p><b>{@link MemberResponse} 가 아니라 {@link MemberProfileResponse} 다</b> — 두 조회가
+	 * 다른 모양인 것이 계약이다 (§3.1).
+	 *
+	 * <p>탈퇴한 프로필은 <b>200</b> 과 {@code deleted: true}, 닉네임 {@code "탈퇴한 회원"} 이고,
+	 * 프로필이 <b>아예 없으면</b> 404 {@code M001} 이다 (§3.1 의 탈퇴 상태 표,
+	 * {@link MemberService#getProfile}). 뒤쪽 404 는 이 경로까지다 — 내부 API 는 404 를 쓰지
+	 * 않는다 (§5.1).
+	 */
+	@GetMapping("/{accountId}")
+	public ApiResponse<MemberProfileResponse> getProfile(@PathVariable Long accountId) {
+		return ApiResponse.success(this.memberService.getProfile(accountId));
 	}
 
 }

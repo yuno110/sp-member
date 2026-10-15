@@ -3,6 +3,7 @@ package com.example.member.member.service;
 import com.example.member.global.error.BusinessException;
 import com.example.member.global.error.ErrorCode;
 import com.example.member.member.dto.CheckResponse;
+import com.example.member.member.dto.MemberProfileResponse;
 import com.example.member.member.dto.MemberResponse;
 import com.example.member.member.dto.NicknameUpdateRequest;
 import com.example.member.member.dto.ProfileCreateRequest;
@@ -233,6 +234,32 @@ public class MemberService {
 	@Transactional(readOnly = true)
 	public MemberResponse getMyProfile(Long accountId) {
 		return MemberResponse.from(myActiveProfile(accountId));
+	}
+
+	/**
+	 * MR-11 — 특정 회원 프로필 조회 (sp-docs/requirements/member.md §1).
+	 * 200 과 {@code {accountId, nickname, createdAt, deleted}} 다
+	 * ({@link MemberProfileResponse}, sp-docs/api-contract.md §3.1).
+	 *
+	 * <p><b>탈퇴한 프로필도 200 이다</b> — 닉네임은 {@code "탈퇴한 회원"} 이고
+	 * {@code deleted: true} 다 (§3.1 의 탈퇴 상태 표). 글이 남아 있으므로 표시할 것이 있고, 404 를
+	 * 주면 클라이언트가 정상적으로 존재하는 글에 오류를 띄운다. <b>그래서
+	 * {@link #myActiveProfile} 을 쓰지 않는다</b> — 그쪽은 탈퇴를 {@code M001} 로 바꾸고 그 결론은
+	 * {@code GET /me}·{@code PATCH /me} 의 것이다.
+	 *
+	 * <p><b>프로필 행이 아예 없으면 404 {@code M001} 이다</b> ({@link MemberReader}). §5.1 이
+	 * 금지한 것은 <b>내부 API</b> 에서 404 를 업무 의미로 쓰는 것이고, 이 경로는 클라이언트를
+	 * 상대하므로 404 가 맞다 — <b>두 경로를 같게 맞추지 않는다</b> (§3.1).
+	 *
+	 * <p>{@code createdAt} 은 {@code member.created_at}(프로필 등록 시각)이다. MR-07 의
+	 * 가입일({@code account.created_at})과 다른 값이고 그쪽은 auth 가 소유한다 (§3.1).
+	 *
+	 * @param accountId 경로 변수. 외부 식별자는 {@code accountId} 이고 {@code member.id} 는
+	 *         노출하지 않는다 (sp-docs/domain-model.md §3.1)
+	 */
+	@Transactional(readOnly = true)
+	public MemberProfileResponse getProfile(Long accountId) {
+		return MemberProfileResponse.from(this.memberReader.getByAccountId(accountId));
 	}
 
 	/**
