@@ -1,6 +1,7 @@
 package com.example.member.global.security;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.example.member.support.TestTokenFactory;
 import java.util.Collection;
@@ -12,6 +13,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.jwt.BadJwtException;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtValidationException;
 import org.springframework.security.oauth2.jwt.JwtValidators;
@@ -68,10 +70,12 @@ class JwtDecoderValidatorsTest {
 			"org.springframework.security.oauth2.jwt.JwtTimestampValidator",
 			"org.springframework.security.oauth2.jwt.X509CertificateThumbprintValidator");
 
+	private static final long ACCOUNT_ID = 7L;
+
 	/**
-	 * 서명 키를 쓰지 않는 테스트지만 공개키 경로를 테스트 키로 덮는다 — 커밋된 실제 공개키를
-	 * 읽어도 되지만, 토큰을 쓰는 다른 테스트와 같은 컨텍스트 캐시 키를 쓰게 해 컨텍스트를
-	 * 하나 더 띄우지 않는다.
+	 * 공개키 경로를 테스트 키로 덮는다. 아래의 디코드 단언이 그 키로 서명한 토큰을 쓰고,
+	 * 토큰을 쓰는 다른 테스트와 같은 컨텍스트 캐시 키를 쓰게 해 컨텍스트를 하나 더 띄우지
+	 * 않는다.
 	 */
 	@DynamicPropertySource
 	static void jwtPublicKey(DynamicPropertyRegistry registry) {
@@ -121,6 +125,33 @@ class JwtDecoderValidatorsTest {
 						+ "'JwtValidationException = 만료' 전제가 깨져 만료가 아닌 사유가 A003 으로 나간다. "
 						+ "이 목록을 늘리지 말고 failureCode 를 함께 고친다")
 				.containsExactlyInAnyOrderElementsOf(expected);
+	}
+
+	/**
+	 * <b>claim 계약 위반이 검증기 <i>결과</i>로 보고되지 않는다</b>는 것을 디코더에서 직접
+	 * 본다. {@code NimbusJwtDecoder} 는 결과에 오류가 있으면 이유와 무관하게
+	 * {@link JwtValidationException} 을 던지고, 위 등식 때문에 그것은 {@code A003}(만료)으로
+	 * 나간다 — §8.5 는 claim 계약 위반을 {@code A002} 로 정했다.
+	 *
+	 * <p>열거 밖 {@code role} 을 누락 {@code role} 과 함께 단언한다. M-12 가 더한 검사가
+	 * <b>누락과 같은 길로</b> 가는지가 그 항목의 "응답이 같다"를 떠받친다
+	 * (sp-docs/plan/phase1.md §5 M-12). {@link JwtValidationException} 은
+	 * {@code BadJwtException} 의 하위이므로 상위 타입 단언만으로는 갈리지 않는다 — 아님까지
+	 * 단언한다.
+	 */
+	@Test
+	@DisplayName("role 이 누락이든 열거 밖이든 JwtValidationException 이 아닌 BadJwtException 으로 끊긴다")
+	void claim_계약_위반이_검증기_결과로_보고되지_않는다() {
+		assertThatThrownBy(() -> this.jwtDecoder.decode(TestTokenFactory.tokenWithoutRole(ACCOUNT_ID)))
+				.as("누락은 M-04 부터 이 길이다")
+				.isInstanceOf(BadJwtException.class)
+				.isNotInstanceOf(JwtValidationException.class);
+
+		assertThatThrownBy(() -> this.jwtDecoder.decode(TestTokenFactory.accessToken(ACCOUNT_ID, "BOGUS")))
+				.as("열거 밖 값이 검증기 결과로 실패하면 계약 위반이 만료(A003)로 읽힌다 "
+						+ "(sp-docs/api-contract.md §8.5)")
+				.isInstanceOf(BadJwtException.class)
+				.isNotInstanceOf(JwtValidationException.class);
 	}
 
 	/**

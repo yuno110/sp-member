@@ -114,6 +114,18 @@ public final class TestTokenFactory {
 	}
 
 	/**
+	 * {@code role} claim 이 공백 문자열인 토큰.
+	 *
+	 * <p>누락과 갈라 두는 이유는 §6 이 <b>누락·공백·열거 밖</b>에 같은 응답을 요구하기
+	 * 때문이다 — 셋을 각각 쳐 봐야 같음이 측정된다 (sp-docs/api-contract.md §6 §8.5).
+	 */
+	public static String tokenWithBlankRole(long accountId) {
+		Instant issuedAt = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+		return sign(CONTRACT_ISSUER, String.valueOf(accountId), "   ",
+				issuedAt, issuedAt.plus(ACCESS_TOKEN_VALIDITY));
+	}
+
+	/**
 	 * payload 의 {@code sub} 를 바꿔 서명과 어긋나게 만든 토큰.
 	 *
 	 * <p><b>조립한 값이다.</b> 서명을 깨뜨리는 것이 목적이므로 발급 경로로는 만들 수 없다

@@ -1,5 +1,6 @@
 package com.example.member.global.security;
 
+import java.util.Set;
 import org.springframework.security.oauth2.core.OAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
 import org.springframework.security.oauth2.jwt.BadJwtException;
@@ -13,8 +14,10 @@ import org.springframework.util.StringUtils;
  * 서명을 통과한 토큰이 sp-docs/api-contract.md §6 의 Claim 계약을 지키는지 본다.
  *
  * <p>서명만으로는 부족하다. 공개키가 맞아도 발급자가 다른 토큰이나 {@code sub}·{@code role} 이
- * 빠진 토큰은 이 서비스가 해석할 수 없다. 그런 토큰을 통과시키면 {@link LoginMember} 가
- * {@code null} 필드로 만들어져 인증 실패가 "익명이지만 인증된 사용자"로 위장된다.
+ * 빠진 토큰은 이 서비스가 해석할 수 없다. {@code role} 은 <b>값까지 본다</b> — §6 이 허용값을
+ * 고정하므로 그 밖의 값은 서명이 유효해도 계약 위반 토큰이다 ({@link #CONTRACT_ROLES}).
+ * 해석할 수 없는 토큰을 통과시키면 {@link LoginMember} 가 {@code null} 필드로 만들어져 인증
+ * 실패가 "익명이지만 인증된 사용자"로 위장된다.
  *
  * <p>등록은 하지 않는다 — 스타터가 컨텍스트의 {@code OAuth2TokenValidator<Jwt>} 빈을 모아
  * 기본 검증기 뒤에 붙인다 (측정: {@code OAuth2ResourceServerJwtConfiguration.JwtDecoderConfiguration}
@@ -48,6 +51,16 @@ public class ClaimContractValidator implements OAuth2TokenValidator<Jwt> {
 
 	/** sp-docs/api-contract.md §6 이 고정한 발급자 식별자. member 는 auth 가 발급한 토큰만 받는다. */
 	public static final String ISSUER = "auth-service";
+
+	/**
+	 * sp-docs/api-contract.md §6 이 고정한 {@code role} 의 허용값. 이 집합 밖의 값은 서명이
+	 * 유효해도 <b>계약 위반 토큰</b>이다 — §6 이 소비자에게 값 검증을 요구한다.
+	 *
+	 * <p><b>열거 타입을 만들지 않는다.</b> {@link LoginMember} 는 claim 값을 문자열로 그대로
+	 * 옮기고(sp-docs/conventions.md §1.2 의 패키지 구조에 권한 타입이 없다), 타입 전환은 이
+	 * 항목의 범위가 아니다 (sp-docs/plan/phase1.md §5 M-12).
+	 */
+	public static final Set<String> CONTRACT_ROLES = Set.of("USER", "ADMIN");
 
 	@Override
 	public OAuth2TokenValidatorResult validate(Jwt jwt) {
@@ -85,10 +98,27 @@ public class ClaimContractValidator implements OAuth2TokenValidator<Jwt> {
 		}
 	}
 
-	/** {@code role} 이 없으면 권한을 만들 수 없다 (§6, sp-docs/security.md §5.1). */
+	/**
+	 * {@code role} 이 {@link #CONTRACT_ROLES} 안의 값인지 본다 (§6, sp-docs/security.md §5.1).
+	 * 없으면 권한을 만들 수 없고, 열거 밖이면 계약 위반 토큰이다.
+	 *
+	 * <p><b>누락·공백과 열거 밖 값이 같은 예외로 나간다</b> — 거부 사유를 응답으로 구별하지
+	 * 않는다 (§6, §8.5 의 "그 밖의 claim 검증 실패"). 예외 메시지는 응답에 나가지 않으므로
+	 * ({@link SecurityErrorResponder}) 본문이 같다.
+	 *
+	 * <p><b>대소문자를 관용하지 않는다.</b> 관용하면 검증 측이 발급 측 계약보다 넓은 값을
+	 * 받아들여, auth 가 거부하는 토큰을 member 가 통과시킨다.
+	 */
 	private void requireRole(Jwt jwt) {
-		if (!StringUtils.hasText(jwt.getClaimAsString(RoleClaimConverter.CLAIM_ROLE))) {
+		String role = jwt.getClaimAsString(RoleClaimConverter.CLAIM_ROLE);
+		// 공백 검사를 먼저 둔다. Set.of(...).contains(null) 은 NPE 이므로(측정) 순서를 바꾸면
+		// role 이 없는 토큰이 401 대신 500 이 된다
+		if (!StringUtils.hasText(role)) {
 			throw new BadJwtException("role claim 이 없다 (sp-docs/api-contract.md §6)");
+		}
+		if (!CONTRACT_ROLES.contains(role)) {
+			// 받은 값을 메시지에 넣지 않는다 (requireIssuer 와 같은 이유)
+			throw new BadJwtException("role claim 이 계약의 허용값이 아니다 (sp-docs/api-contract.md §6)");
 		}
 	}
 

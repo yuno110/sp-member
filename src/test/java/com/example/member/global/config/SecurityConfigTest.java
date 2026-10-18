@@ -32,6 +32,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -219,6 +220,21 @@ class SecurityConfigTest {
 				.isEqualTo("role");
 	}
 
+	/**
+	 * {@code role} 열거 값의 출처를 고정한다. <b>기대값은 위와 같은 이유로 리터럴이다.</b>
+	 *
+	 * <p>이 집합이 member 안에서 열거를 적는 자리이고 {@code ClaimContractValidator} 가 그것만
+	 * 쓴다 (sp-docs/plan/phase1.md §5 M-12). 값이 §6 에서 어긋나면 auth 가 발급한 토큰이
+	 * 거부되거나 계약 밖 토큰이 통과한다.
+	 */
+	@Test
+	@DisplayName("role 의 허용값 출처가 Claim 계약의 열거다")
+	void role_허용값_출처() {
+		assertThat(ClaimContractValidator.CONTRACT_ROLES)
+				.as("§6 이 role 을 USER | ADMIN 으로 고정한다")
+				.containsExactlyInAnyOrder("USER", "ADMIN");
+	}
+
 	@Test
 	@DisplayName("유효한 토큰이 통과하고 LoginMember 가 sub·role 로 채워진다")
 	void 유효한_토큰으로_인증된다() throws Exception {
@@ -313,6 +329,78 @@ class SecurityConfigTest {
 				"A002", "유효하지 않은 토큰입니다.");
 	}
 
+	@Test
+	@DisplayName("role claim 이 공백인 토큰은 401 A002 다")
+	void role_이_공백이면_A002() throws Exception {
+		assertAuthFailure("Bearer " + TestTokenFactory.tokenWithBlankRole(ACCOUNT_ID),
+				"A002", "유효하지 않은 토큰입니다.");
+	}
+
+	/**
+	 * 열거 밖 {@code role} 은 서명이 유효해도 <b>계약 위반 토큰</b>이다 — §6 이 소비자에게 값
+	 * 검증을 요구한다 (sp-docs/plan/phase1.md §5 M-12).
+	 */
+	@Test
+	@DisplayName("role 이 열거 밖인 토큰은 401 A002 다")
+	void role_이_열거_밖이면_A002() throws Exception {
+		assertAuthFailure("Bearer " + TestTokenFactory.accessToken(ACCOUNT_ID, "BOGUS"),
+				"A002", "유효하지 않은 토큰입니다.");
+	}
+
+	/**
+	 * <b>거부 사유를 응답으로 구별하지 않는다</b> (sp-docs/api-contract.md §6, §8.5 의 "그 밖의
+	 * claim 검증 실패"). 상태·코드·메시지가 같은 것으로는 모자라므로 본문을 <b>바이트로</b>
+	 * 견준다 — 그 본문에는 시각이 없다 (§7 의 공통 형식).
+	 */
+	@Test
+	@DisplayName("누락·공백·열거 밖 role 의 응답이 바이트 동일이다")
+	void role_거부_사유를_응답으로_구별하지_않는다() throws Exception {
+		MockHttpServletResponse missing =
+				authFailureResponse("Bearer " + TestTokenFactory.tokenWithoutRole(ACCOUNT_ID));
+		MockHttpServletResponse blank =
+				authFailureResponse("Bearer " + TestTokenFactory.tokenWithBlankRole(ACCOUNT_ID));
+		MockHttpServletResponse outOfEnum =
+				authFailureResponse("Bearer " + TestTokenFactory.accessToken(ACCOUNT_ID, "BOGUS"));
+
+		assertThat(missing.getContentAsByteArray())
+				.as("빈 본문끼리는 어떤 바이트 비교도 통과한다 — 기준 응답이 비면 아래 세 단언이 공허해지므로 "
+						+ "본문이 있는지 먼저 본다")
+				.isNotEmpty();
+		assertThat(outOfEnum.getContentAsByteArray())
+				.as("열거 밖 role 이 누락과 다른 응답을 내면 토큰의 어느 claim 이 왜 틀렸는지가 드러난다 "
+						+ "(sp-docs/security.md §4.1)")
+				.isEqualTo(missing.getContentAsByteArray());
+		assertThat(blank.getContentAsByteArray())
+				.as("공백도 같다 (sp-docs/api-contract.md §6)")
+				.isEqualTo(missing.getContentAsByteArray());
+		assertThat(List.of(outOfEnum.getContentType(), blank.getContentType()))
+				.as("Content-Type 도 갈리지 않는다")
+				.containsOnly(missing.getContentType());
+	}
+
+	/**
+	 * 대소문자를 관용하면 검증 측이 발급 측 계약보다 넓은 값을 받아들여, auth 가 거부하는 토큰을
+	 * member 가 통과시킨다 (sp-docs/tech-stack.md §2.1 이 그 갈림을 기록한다).
+	 */
+	@Test
+	@DisplayName("role 이 소문자인 토큰은 401 A002 다 — 대소문자를 관용하지 않는다")
+	void role_의_대소문자를_관용하지_않는다() throws Exception {
+		assertAuthFailure("Bearer " + TestTokenFactory.accessToken(ACCOUNT_ID, "user"),
+				"A002", "유효하지 않은 토큰입니다.");
+	}
+
+	@ParameterizedTest(name = "role = {0}")
+	@ValueSource(strings = {"USER", "ADMIN"})
+	@DisplayName("계약의 열거 값인 role 은 그대로 통과한다")
+	void 계약의_열거_값은_통과한다(String role) throws Exception {
+		this.mockMvc.perform(get("/test/current-member")
+						.header(HttpHeaders.AUTHORIZATION,
+								"Bearer " + TestTokenFactory.accessToken(ACCOUNT_ID, role)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.accountId").value(ACCOUNT_ID))
+				.andExpect(jsonPath("$.role").value(role));
+	}
+
 	// --- STATELESS (sp-docs/security.md §1) ---
 
 	@Test
@@ -376,6 +464,14 @@ class SecurityConfigTest {
 
 	private String bearer() {
 		return "Bearer " + TestTokenFactory.accessToken(ACCOUNT_ID, "ADMIN");
+	}
+
+	/** 거부된 응답 자체를 돌려준다. 본문을 바이트로 견주려면 ResultMatcher 로는 모자란다. */
+	private MockHttpServletResponse authFailureResponse(String authorization) throws Exception {
+		return this.mockMvc.perform(get("/test/current-member").header(HttpHeaders.AUTHORIZATION, authorization))
+				.andExpect(status().isUnauthorized())
+				.andReturn()
+				.getResponse();
 	}
 
 	private void assertAuthFailure(String authorization, String code, String message) throws Exception {
