@@ -44,7 +44,7 @@
 - [x] M-10 프로필 조회와 내부 API · 상태 done
 - [x] M-11 마무리 · 상태 done
 - [x] M-12 열거 밖 role 을 거부한다 [1차 후] · 상태 done
-- [ ] M-13 member javadoc 의 수량 주장과 거짓 인용 [1차 후] · 상태 todo
+- [x] M-13 member javadoc 의 수량 주장과 거짓 인용 [1차 후] · 상태 done
 
 > **M-06·M-07은 없다.** 로그인·재발급·로그아웃이 auth-service로 옮겨가 `AU-06`·`AU-07`이 됐다 (`sp-docs/adr/0012`). **번호는 재사용하지 않는다.**
 >

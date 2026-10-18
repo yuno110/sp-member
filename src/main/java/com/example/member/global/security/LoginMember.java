@@ -3,7 +3,11 @@ package com.example.member.global.security;
 /**
  * 인증된 요청의 주체. <b>검증된 JWT Claim 에서만 만든다</b> (sp-docs/api-contract.md §6).
  *
- * <p>요청 본문·경로 변수의 식별자를 신뢰하지 않는다 (sp-docs/security.md §4).
+ * <p>요청 본문의 식별자를 신뢰하지 않는다 (sp-docs/security.md §4 의
+ * {@code account_id = Claim.sub}). <b>경로 변수의 {@code accountId} 는 주체가 아니라 조회
+ * 대상이다</b> — {@code GET /api/v1/members/{accountId}} 는 {@code SecurityConfig} 에서
+ * {@code permitAll} 이고, 그 값을 {@code MemberController#getProfile} 이 공개 조회의 조회
+ * 키로 읽는다.
  *
  * <p><b>{@code nickname} 필드가 없다.</b> Claim 에 없기 때문이다 — auth 는 닉네임을 소유하지
  * 않으므로 서명하지 않는다 (sp-docs/conventions.md §1.2, sp-docs/adr/0012 §3). 닉네임은 이
