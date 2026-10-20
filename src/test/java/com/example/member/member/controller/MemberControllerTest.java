@@ -913,9 +913,9 @@ class MemberControllerTest {
 	 * <p><b>키마다 {@code doesNotExist} 를 쓰지 않는다.</b> 집합 자체를 단언하면 새로 늘어난 키도
 	 * 잡힌다.
 	 *
-	 * <p><b>{@code createdAt} 을 고정 패턴으로 못박지 않는다.</b> 소수부는 저장값에 따르므로
-	 * 운영 MySQL {@code DATETIME} 은 초 단위고 테스트 H2 는 마이크로초까지 있다
-	 * (sp-docs/tech-stack.md §6). 그래서 <b>소수부를 선택으로 둔 정규식</b>으로 계약(오프셋 없는
+	 * <p><b>{@code createdAt} 을 고정 패턴으로 못박지 않는다.</b> 소수부는 저장값에 따른다 —
+	 * 감사가 만든 값에는 없지만({@code D-11} 이 초로 잘랐다, sp-docs/api-contract.md §4.3)
+	 * 마이그레이션·SQL 픽스처가 직접 넣은 행에는 남을 수 있다. 그래서 <b>소수부를 선택으로 둔 정규식</b>으로 계약(오프셋 없는
 	 * ISO-8601 지역시각)을 보고, 값 자체는 <b>DB 에 저장된 {@code member.created_at} 과 같은지</b>로
 	 * 본다 — 그것이 완료 기준 "그 {@code createdAt} 은 {@code member.created_at} 이다" 가 요구하는
 	 * 것이고, 응답에 {@code updated_at} 이나 현재 시각을 실은 구현을 가른다.

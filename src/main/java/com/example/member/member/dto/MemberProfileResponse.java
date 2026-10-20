@@ -22,8 +22,9 @@ import java.time.LocalDateTime;
  *
  * <p>직렬화 형태는 <b>오프셋 없는 ISO-8601 지역시각</b>이다. 타입이 {@code LocalDateTime} 이고
  * Boot 가 {@code WRITE_DATES_AS_TIMESTAMPS} 를 끄기 때문이며, <b>소수부는 저장값에 있으면 그대로
- * 나간다</b> — 운영 MySQL {@code DATETIME} 은 초 단위고 테스트 H2 는 마이크로초까지 있다
- * (sp-docs/tech-stack.md §6). 그래서 고정 패턴을 강제하지 않는다.
+ * 나간다</b>. <b>감사가 만든 값에는 소수부가 없다</b> — {@code D-11} 이 초로 잘라 운영과
+ * 테스트를 같게 했다 (sp-docs/api-contract.md §4.3). <b>그래도 고정 패턴을 강제하지 않는다</b>:
+ * 마이그레이션·SQL 픽스처가 직접 넣은 행은 감사를 거치지 않아 소수부를 가질 수 있다.
  *
  * <p>탈퇴한 프로필의 {@code nickname} 은 {@code "탈퇴한 회원"} 이다 —
  * {@link Member#displayNickname()} 의 <b>응답 시 변환</b>이고 저장값은 NULL 이다
