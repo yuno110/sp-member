@@ -33,7 +33,8 @@ public enum ErrorCode {
 	ACCESS_DENIED(HttpStatus.FORBIDDEN, "A004", "권한이 없습니다."),
 
 	// member-service — §8.2
-	// M001 은 "프로필이 아직 없음" 에도 쓴다. 오류가 아니라 가입 3단계 미완료를 뜻한다 (§3).
+	// M001 은 "프로필이 아직 없음" 에도 쓴다. 그 뜻이면 오류가 아니라 가입 3단계 미완료다 (§3).
+	// 탈퇴한 프로필에 M001 을 주는 요청도 있다 (§3.1 의 표).
 	MEMBER_NOT_FOUND(HttpStatus.NOT_FOUND, "M001", "프로필을 찾을 수 없습니다."),
 	NICKNAME_DUPLICATED(HttpStatus.CONFLICT, "M003", "이미 사용 중인 닉네임입니다."),
 	MEMBER_ALREADY_REGISTERED(HttpStatus.CONFLICT, "M006", "이미 프로필이 등록된 계정입니다."),

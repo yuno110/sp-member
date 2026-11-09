@@ -112,9 +112,9 @@ public class MemberController {
 	 * 프로필이 이 경로로 나갈 수 없다 (sp-docs/security.md §4).
 	 *
 	 * <p>프로필이 없으면 404 {@code M001} 이다 — <b>오류가 아니라 가입 3단계 미완료</b>를 뜻하고
-	 * 클라이언트는 프로필 등록 화면으로 보낸다 (sp-docs/api-contract.md §3,
+	 * 클라이언트는 프로필 등록으로 안내한다 (sp-docs/api-contract.md §3,
 	 * sp-docs/requirements/member.md §5). <b>탈퇴한 프로필도 같은 404 {@code M001}</b> 이다
-	 * (§3.1 의 표).
+	 * (§3.1 의 표). 이 응답으로는 둘을 가를 수 없다 — 가르는 것은 공개 조회의 {@code deleted} 다.
 	 */
 	@GetMapping("/me")
 	public ApiResponse<MemberResponse> getMyProfile(@CurrentMember LoginMember loginMember) {
@@ -157,7 +157,7 @@ public class MemberController {
 	 * {@code @Valid} 도 없다.
 	 *
 	 * <p><b>계정 상태를 확인하지 않는다.</b> member 는 {@code sp_auth} 를 조회할 수 없고 auth 를
-	 * 호출하지 않는다 (sp-docs/architecture.md §5). 2단계는 1단계에서 쓰던 Access Token 으로
+	 * 호출하지 않는다 (sp-docs/architecture.md §5). 2단계는 1단계와 같은 로그인의 Access Token 으로
 	 * 수행되며 토큰 서명이 유효하면 통과한다 (sp-docs/requirements/member.md §8).
 	 *
 	 * <p>탈퇴 대상은 검증된 토큰의 {@code sub} 가 정한다 — 경로에 식별자가 없으므로 타인의

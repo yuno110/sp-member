@@ -90,7 +90,7 @@ git clone https://github.com/yuno110/sp-docs.git ../sp-docs
 - **`accountId` 기준으로 멱등이다.** 상태별 응답은 `sp-docs/api-contract.md` §3에 있다
 - **탈퇴 시 비밀번호를 받지 않는다.** 재확인은 1단계(auth)에서 끝났다. member는 비밀번호를 갖지 않는다
 - **계정 상태를 확인하지 않는다.** `sp_auth`를 조회할 수 없다. 토큰 서명이 유효하면 진행한다
-- `GET /api/v1/members/me`는 프로필이 없으면 **404 `M001`**이다. 오류가 아니라 가입 3단계 미완료를 뜻한다
+- `GET /api/v1/members/me`는 프로필이 없거나 탈퇴했으면 **404 `M001`**이다. 없으면 오류가 아니라 가입 3단계 미완료를 뜻하고, 이 응답으로는 둘을 가를 수 없다 — 가르는 것은 `GET /api/v1/members/{accountId}`의 `deleted`다
 
 ### 내부 API — 1차부터 board가 호출한다
 
