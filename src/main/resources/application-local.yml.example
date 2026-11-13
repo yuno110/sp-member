@@ -31,3 +31,13 @@ member-service:
 # 여러 개는 쉼표로 구분한다
 cors:
   allowed-origins: http://localhost:3000
+
+# 요청 수 제한의 한도를 크게 덮는다 (sp-docs/tech-stack.md §4.6). 실제 서비스 e2e 는 local 로
+# 띄운 서비스를 한 주소에서 여러 번 치므로 운영 한도(분당 20, application.yml)로는 e2e 가 스스로
+# 429 를 맞는다. 값은 이 템플릿이 정하고 기준은 「운영 한도보다 e2e 의 요청 수가 넉넉히 들어가게」
+# 다. 이 덮음 때문에 e2e 는 제한을 검증하지 않는다 — 제한은 서비스의 테스트가 시계를 움직여 본다.
+# 창(window)과 버킷 수는 application.yml 의 값이 그대로 쓰인다 — 두 파일은 키 단위로 합쳐진다
+rate-limit:
+  rules:
+    check-nickname:
+      limit: 10000

@@ -105,7 +105,7 @@ SET PERSIST time_zone = '+09:00';
 cp src/main/resources/application-local.yml.example src/main/resources/application-local.yml
 ```
 
-**템플릿을 복사한 뒤 값을 모두 채운다.** 템플릿에 자리가 있는 것은 넷이다.
+**템플릿을 복사한 뒤 값을 모두 채운다.** 템플릿에 자리가 있는 것은 아래 표다.
 
 | 키 | 채울 것 |
 | --- | --- |
@@ -113,10 +113,28 @@ cp src/main/resources/application-local.yml.example src/main/resources/applicati
 | `member-service.internal-api-key` | 내부 API 키. **board와 같은 값** |
 | `cors.allowed-origins` | 허용 오리진. 로컬은 `http://localhost:3000` |
 | `spring.jpa.show-sql` · `logging.level.org.hibernate.orm.jdbc.bind` | 그대로 둔다 (로컬만 SQL 로그 ON) |
+| `rate-limit.rules.check-nickname.limit` | 그대로 둔다 (로컬만 요청 수 제한의 한도를 크게 덮는다 — 아래) |
 
 > **`cors.allowed-origins`가 없으면 `local` 프로파일로 기동할 수 없다.** 값이 없으면 `SecurityConfig.corsConfigurationSource`의 `@Value` 해석이 실패해 `BeanCreationException`으로 **기동이 멈춘다.** 허용 오리진은 환경이 정하는 정책값이므로 기본값을 두지 않는다 (`sp-docs/security.md` §1.1, `sp-docs/tech-stack.md` §4.3). **템플릿보다 오래된 `application-local.yml`을 쓰고 있으면 이 키가 빠져 있다** — 템플릿과 대조해 채운다.
 >
 > `member-service.internal-api-key`도 같다. 빠지면 `/internal/**` 필터 체인 빈 생성이 실패한다. **다만 빈 문자열은 해석에 성공한다** — 없을 때만 기동이 멈추므로, 비워 두지 않는다 (`sp-docs/tech-stack.md` §4.3).
+
+#### 로컬 템플릿은 요청 수 제한의 한도를 덮는다
+
+`GET /api/v1/members/check-nickname`에는 IP 단위 요청 수 제한이 있다 — 운영 한도는 **분당 20**이고 넘으면 **429 `C009`** 와 `Retry-After`다 (`sp-docs/security.md` §10). 한도·창·버킷 수는 정본 값이라 `application.yml`에 적혀 있다 (`sp-docs/tech-stack.md` §4.6).
+
+실제 서비스 e2e는 `local`로 띄워 둔 서비스를 한 주소에서 여러 번 치므로 운영 한도로는 e2e가 스스로 429를 맞는다. 그래서 **템플릿이 한도를 크게 덮는다** — 기준은 「운영 한도보다 e2e의 요청 수가 넉넉히 들어가게」다 (§4.6). 그 덮음 때문에 e2e는 제한을 검증하지 않는다. 제한은 서비스의 테스트가 시계를 움직여 본다.
+
+**템플릿보다 오래된 `application-local.yml`에는 이 줄이 없다** — 아래를 그 파일 끝에 옮긴다. 창(`window`)과 버킷 수는 `application.yml`의 값이 그대로 쓰인다(두 파일은 키 단위로 합쳐진다).
+
+```yaml
+rate-limit:
+  rules:
+    check-nickname:
+      limit: 10000
+```
+
+옮기지 않아도 기동은 된다 — 운영 한도(분당 20)가 그대로 걸릴 뿐이다.
 
 ### 4. 실행
 

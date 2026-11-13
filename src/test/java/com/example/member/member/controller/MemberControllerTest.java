@@ -1,20 +1,27 @@
 package com.example.member.member.controller;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.head;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.example.member.global.ratelimit.RateLimitProperties;
 import com.example.member.member.entity.Member;
 import com.example.member.member.repository.MemberRepository;
+import com.example.member.support.MutableClock;
 import com.example.member.support.TestTokenFactory;
 import com.jayway.jsonpath.JsonPath;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
@@ -32,8 +39,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.convention.TestBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 
 /**
  * sp-docs/plan/phase1.md §5 M-05 · M-08 의 "검증" 표 중 HTTP 쪽을 테스트로 옮긴 것이다. 정본은
@@ -52,6 +61,10 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
  * {@code 관리자} 가 아닌 값을 쓴다. ADMIN seed 가 {@code (1, '관리자')} 를 넣으므로 겹치면 UNIQUE
  * 위반으로 깨진다 (sp-docs/requirements/member.md §10.1). M-08 의 {@code MemberServiceTest}
  * 픽스처(241~)와도 범위를 겹치지 않게 둔다.
+ *
+ * <p><b>앱 시계를 {@link MutableClock} 으로 바꾼다</b> (M-15). 요청 수 제한의 테스트는 시계를
+ * 멈추고 요청 주소를 {@code 203.0.113.0/24}(문서용 대역)에서 테스트마다 따로 쓴다. 시계를 멈추지
+ * 않은 테스트에서는 시스템 시계다.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -72,10 +85,27 @@ class MemberControllerTest {
 	/** sp-docs/requirements/member.md §2 가 정한 닉네임 메시지다. */
 	private static final String NICKNAME_MESSAGE = "닉네임은 2~10자여야 합니다.";
 
+	/** application-test.yml 이 주는 테스트 전용 오리진. */
+	private static final String ALLOWED_ORIGIN = "http://localhost:3000";
+
+	/** 앱 시계를 바꿔 끼운다. 고정하지 않은 테스트에서는 시스템 시계다 ({@link MutableClock}). */
+	private static final MutableClock CLOCK = new MutableClock();
+
 	@DynamicPropertySource
 	static void jwtPublicKey(DynamicPropertyRegistry registry) {
 		TestTokenFactory.registerPublicKeyLocation(registry);
 	}
+
+	/** 애플리케이션의 {@code Clock} 빈을 {@link #CLOCK} 로 바꾼다 ({@code ClockConfig}). */
+	@TestBean
+	private Clock clock;
+
+	static Clock clock() {
+		return CLOCK;
+	}
+
+	@Autowired
+	private RateLimitProperties rateLimitProperties;
 
 	@Autowired
 	private MockMvc mockMvc;
@@ -93,6 +123,7 @@ class MemberControllerTest {
 	 */
 	@AfterEach
 	void 정리() {
+		CLOCK.reset();
 		this.memberRepository.deleteAll(this.memberRepository.findAll().stream()
 				.filter(profile -> !SEED_ACCOUNT_ID.equals(profile.getAccountId()))
 				.toList());
@@ -431,6 +462,184 @@ class MemberControllerTest {
 				.andExpect(jsonPath("$.error.fieldErrors", hasSize(1)))
 				.andExpect(jsonPath("$.error.fieldErrors[0].field").value("nickname"))
 				.andExpect(jsonPath("$.error.fieldErrors[0].message").value(NICKNAME_MESSAGE));
+	}
+
+	// --- 요청 수 제한 (M-15, sp-docs/security.md §10 표의 check-nickname 줄) ---
+	//
+	// 한도는 테스트 프로파일의 값이다(application-test.yml. 운영 값은 RateLimitConfigTest 가 본다).
+	// 테스트마다 시계를 다른 창에 멈춘다 — 창이 바뀌면 제한기가 카운터를 비우므로 다른 테스트가 센
+	// 요청이 섞이지 않는다. 멈춘 시계는 정리()가 되돌린다
+
+	/**
+	 * 넘은 요청은 429 {@code C009} 와 {@code Retry-After} 다 — 창이 끝날 때까지 남은 초의 올림이다
+	 * (sp-docs/security.md §10, sp-docs/api-contract.md §8.1·§9.13). 10:00:15 의 분 창은 45초 남았다.
+	 */
+	@Test
+	@DisplayName("check-nickname 을 한도까지 보내면 통과하고 다음은 429 C009 와 Retry-After 다")
+	void 중복_확인_한도_초과() throws Exception {
+		CLOCK.set(LocalDateTime.of(2030, 1, 1, 10, 0, 15));
+		for (int i = 0; i < 한도(); i++) {
+			this.mockMvc.perform(중복_확인("203.0.113.10")).andExpect(status().isOk());
+		}
+
+		this.mockMvc.perform(중복_확인("203.0.113.10"))
+				.andExpect(status().isTooManyRequests())
+				.andExpect(header().string(HttpHeaders.RETRY_AFTER, "45"))
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.data").doesNotExist())
+				.andExpect(jsonPath("$.error.code").value("C009"))
+				.andExpect(jsonPath("$.error.message").value("요청이 너무 많습니다. 잠시 후 다시 시도해 주세요."))
+				.andExpect(jsonPath("$.error.fieldErrors", hasSize(0)));
+	}
+
+	@Test
+	@DisplayName("시계가 창 경계를 넘으면 다시 통과한다")
+	void 창_경계를_넘으면_다시_통과한다() throws Exception {
+		CLOCK.set(LocalDateTime.of(2030, 1, 1, 11, 0, 59));
+		for (int i = 0; i < 한도(); i++) {
+			this.mockMvc.perform(중복_확인("203.0.113.11")).andExpect(status().isOk());
+		}
+		this.mockMvc.perform(중복_확인("203.0.113.11"))
+				.andExpect(status().isTooManyRequests())
+				.andExpect(header().string(HttpHeaders.RETRY_AFTER, "1"));
+
+		CLOCK.set(LocalDateTime.of(2030, 1, 1, 11, 1, 0));
+
+		this.mockMvc.perform(중복_확인("203.0.113.11")).andExpect(status().isOk());
+	}
+
+	/**
+	 * {@code X-Forwarded-For} 는 클라이언트가 임의로 쓰는 헤더다 — 키로 믿으면 요청마다 값을 바꿔
+	 * 제한을 비켜 간다 (§10 「키의 주소」). MockMvc 는 Tomcat 의 주소 처리를 거치지 않으므로 여기서
+	 * 보는 것은 제한기가 그 헤더를 읽지 않는다는 것이다. 컨테이너 쪽은
+	 * {@code server.forward-headers-strategy: none} 이 막는다.
+	 */
+	@Test
+	@DisplayName("요청마다 X-Forwarded-For 를 바꿔도 같은 키로 센다")
+	void X_Forwarded_For_를_바꿔도_같은_키로_센다() throws Exception {
+		CLOCK.set(LocalDateTime.of(2030, 1, 1, 12, 0, 15));
+		for (int i = 0; i < 한도(); i++) {
+			this.mockMvc.perform(중복_확인("203.0.113.12").header("X-Forwarded-For", 전달_주소(i)))
+					.andExpect(status().isOk());
+		}
+
+		this.mockMvc.perform(중복_확인("203.0.113.12").header("X-Forwarded-For", 전달_주소(한도())))
+				.andExpect(status().isTooManyRequests());
+	}
+
+	/**
+	 * 그 경로에 닿은 요청은 성공·실패를 가르지 않고 센다 (§10 「세는 요청」). 파라미터 검증은 핸들러를
+	 * 부를 때 일어나므로 400 이 난 요청도 이미 세어졌다.
+	 */
+	@Test
+	@DisplayName("형식이 틀려 400 이 난 요청도 센다")
+	void 검증에_실패한_요청도_센다() throws Exception {
+		CLOCK.set(LocalDateTime.of(2030, 1, 1, 13, 0, 15));
+		for (int i = 0; i < 한도(); i++) {
+			this.mockMvc.perform(get(CHECK_PATH).param("nickname", "nick!").with(주소("203.0.113.13")))
+					.andExpect(status().isBadRequest());
+		}
+
+		this.mockMvc.perform(중복_확인("203.0.113.13")).andExpect(status().isTooManyRequests());
+	}
+
+	/**
+	 * preflight 를 세면 브라우저가 실제 요청 앞에 보내는 {@code OPTIONS} 가 한도를 먹는다 (§10
+	 * 「세는 요청」). 한도만큼 preflight 를 보낸 뒤에도 한도만큼 통과하고, 그다음이 429 다.
+	 */
+	@Test
+	@DisplayName("preflight 는 세지 않는다")
+	void preflight_는_세지_않는다() throws Exception {
+		CLOCK.set(LocalDateTime.of(2030, 1, 1, 14, 0, 15));
+		for (int i = 0; i < 한도(); i++) {
+			this.mockMvc.perform(options(CHECK_PATH)
+							.header(HttpHeaders.ORIGIN, ALLOWED_ORIGIN)
+							.header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "GET")
+							.with(주소("203.0.113.14")))
+					.andExpect(status().isOk());
+		}
+		for (int i = 0; i < 한도(); i++) {
+			this.mockMvc.perform(중복_확인("203.0.113.14")).andExpect(status().isOk());
+		}
+
+		this.mockMvc.perform(중복_확인("203.0.113.14")).andExpect(status().isTooManyRequests());
+	}
+
+	/**
+	 * Spring MVC 는 HEAD 를 GET 핸들러로 보낸다 — HEAD 도 그 경로에 닿은 요청이라 GET 과 같은 카운터로
+	 * 센다 (§10 「세는 요청」). 인가 규칙이 무인증으로 여는 것은 GET 이라 HEAD 는 토큰을 실어야 핸들러에
+	 * 닿는다 — 토큰은 인가만 지나게 하고 프로필을 만들지 않는다. HEAD 를 세지 않으면 토큰을 가진
+	 * 클라이언트가 HEAD 로 한도를 비켜 간다. 한도만큼 HEAD 를 보낸 뒤의 GET 이 429 다.
+	 */
+	@Test
+	@DisplayName("토큰을 실은 HEAD 도 GET 과 같은 카운터로 센다")
+	void HEAD_도_GET_과_같은_카운터로_센다() throws Exception {
+		CLOCK.set(LocalDateTime.of(2030, 1, 1, 17, 0, 15));
+		for (int i = 0; i < 한도(); i++) {
+			this.mockMvc.perform(head(CHECK_PATH).param("nickname", "아무도안쓰는닉")
+							.header(HttpHeaders.AUTHORIZATION, bearer(301L))
+							.with(주소("203.0.113.17")))
+					.andExpect(status().isOk());
+		}
+
+		this.mockMvc.perform(중복_확인("203.0.113.17")).andExpect(status().isTooManyRequests());
+	}
+
+	/**
+	 * 429 에도 CORS 헤더가 실려야 브라우저가 그 응답을 읽는다 — 없으면 브라우저는 429 가 아니라 CORS
+	 * 실패를 본다. {@code Retry-After} 가 노출돼야 화면이 언제 다시 할지 말할 수 있다 (§10, §1.1).
+	 */
+	@Test
+	@DisplayName("허용 오리진에서 온 요청의 429 에도 CORS 헤더가 실리고 Retry-After 가 노출된다")
+	void 제한_응답에도_CORS_헤더가_실린다() throws Exception {
+		CLOCK.set(LocalDateTime.of(2030, 1, 1, 15, 0, 15));
+		for (int i = 0; i < 한도(); i++) {
+			this.mockMvc.perform(중복_확인("203.0.113.15").header(HttpHeaders.ORIGIN, ALLOWED_ORIGIN))
+					.andExpect(status().isOk());
+		}
+
+		this.mockMvc.perform(중복_확인("203.0.113.15").header(HttpHeaders.ORIGIN, ALLOWED_ORIGIN))
+				.andExpect(status().isTooManyRequests())
+				.andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, ALLOWED_ORIGIN))
+				.andExpect(header().string(HttpHeaders.ACCESS_CONTROL_EXPOSE_HEADERS,
+						containsString(HttpHeaders.RETRY_AFTER)))
+				.andExpect(header().string(HttpHeaders.RETRY_AFTER, "45"));
+	}
+
+	/**
+	 * 제한은 정본 표의 경로에만 건다 — 그 밖의 경로는 제한하지 않는다 (§10). 그 경로의 요청이
+	 * {@code check-nickname} 의 칸을 먹지도 않는다.
+	 */
+	@Test
+	@DisplayName("제한하지 않는 경로는 몇 번이든 429 가 아니고 check-nickname 의 한도를 먹지 않는다")
+	void 제한하지_않는_경로() throws Exception {
+		CLOCK.set(LocalDateTime.of(2030, 1, 1, 16, 0, 15));
+		for (int i = 0; i <= 한도(); i++) {
+			this.mockMvc.perform(get(PATH + "/" + SEED_ACCOUNT_ID).with(주소("203.0.113.16")))
+					.andExpect(status().isOk());
+		}
+
+		this.mockMvc.perform(중복_확인("203.0.113.16")).andExpect(status().isOk());
+	}
+
+	private int 한도() {
+		return this.rateLimitProperties.rules().get("check-nickname").limit();
+	}
+
+	private static MockHttpServletRequestBuilder 중복_확인(String remoteAddr) {
+		return get(CHECK_PATH).param("nickname", "아무도안쓰는닉").with(주소(remoteAddr));
+	}
+
+	private static RequestPostProcessor 주소(String remoteAddr) {
+		return request -> {
+			request.setRemoteAddr(remoteAddr);
+			return request;
+		};
+	}
+
+	/** 요청마다 바뀌는 {@code X-Forwarded-For} 값 (198.51.100.0/24, 문서용 대역). */
+	private static String 전달_주소(int i) {
+		return "198.51.100." + (i % 250 + 1);
 	}
 
 	// --- 내 프로필 조회·수정 (sp-docs/api-contract.md §3.1) ---

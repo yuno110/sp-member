@@ -2,9 +2,11 @@ package com.example.member.global.error;
 
 import com.example.member.global.common.ApiResponse;
 import com.example.member.global.common.ErrorResponse;
+import com.example.member.global.ratelimit.RateLimitExceededException;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -213,6 +215,27 @@ public class GlobalExceptionHandler {
 	public ResponseEntity<ApiResponse<Void>> handleMissingServletRequestPart(MissingServletRequestPartException e) {
 		log.warn("missing request part: {}", e.getRequestPartName());
 		return toResponse(ErrorCode.INVALID_INPUT_VALUE);
+	}
+
+	/**
+	 * 요청 수 제한을 넘었다 — 제한기가 던진다 (sp-docs/security.md §10).
+	 *
+	 * <p><b>429 {@code C009} 이고 {@code fieldErrors} 는 빈 배열이며 {@code Retry-After}(초) 헤더를
+	 * 싣는다</b> (sp-docs/conventions.md §6.1, sp-docs/api-contract.md §8.1 의 {@code C009} 문단).
+	 * 헤더가 하나 더 붙으므로 {@link BusinessException} 의 일반 경로로 보내지 않고 여기서 따로
+	 * 다룬다. 로그 수준은 다른 클라이언트 오류와 같은 {@code warn} 이다.
+	 *
+	 * <p>CORS 헤더는 이 응답 전에 Security 의 CORS 필터가 이미 실었다 — 제한기가 그 뒤의 MVC
+	 * 인터셉터에서 세기 때문이다 (§10).
+	 */
+	@ExceptionHandler(RateLimitExceededException.class)
+	public ResponseEntity<ApiResponse<Void>> handleRateLimitExceeded(RateLimitExceededException e) {
+		log.warn("rate limit exceeded: rule {}, retry after {}s", e.getRule(), e.getRetryAfterSeconds());
+		ErrorCode errorCode = ErrorCode.TOO_MANY_REQUESTS;
+		ErrorResponse error = new ErrorResponse(errorCode.getCode(), errorCode.getMessage(), List.of());
+		return ResponseEntity.status(errorCode.getStatus())
+				.header(HttpHeaders.RETRY_AFTER, Long.toString(e.getRetryAfterSeconds()))
+				.body(ApiResponse.failure(error));
 	}
 
 	/** 마지막 그물. 여기까지 온 것은 예상하지 못한 예외이므로 서버 로그에만 원인을 남긴다. */

@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -16,6 +17,9 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.example.member.global.common.ApiResponse;
+import com.example.member.global.config.ClockConfig;
+import com.example.member.global.ratelimit.RateLimitConfig;
+import com.example.member.global.ratelimit.RateLimitExceededException;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -27,6 +31,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
@@ -58,9 +63,14 @@ import org.springframework.web.multipart.MultipartFile;
  * (sp-docs/conventions.md §9.1). 인자 없는 {@code @WebMvcTest} 는 업무 컨트롤러를 올리면서
  * 그 의존(서비스)은 올리지 않으므로, 기능 단계가 컨트롤러를 추가할 때 이 컨텍스트가 기동에
  * 실패한다.
+ *
+ * <p><b>{@code RateLimitConfig}·{@code ClockConfig} 를 함께 {@code @Import} 한다</b> (M-15).
+ * 슬라이스는 {@code WebMvcConfigurer} 인 {@code WebConfig} 를 올리는데, 그것이 요청 수 제한
+ * 인터셉터에 거는 제한기 빈은 일반 {@code @Configuration} 이 만들어 슬라이스가 스캔하지 않는다.
+ * 이 테스트의 경로({@code /test/**})는 요청 수 제한의 대상이 아니다.
  */
 @WebMvcTest(controllers = GlobalExceptionHandlerTest.ExceptionTestController.class)
-@Import(GlobalExceptionHandlerTest.ExceptionTestController.class)
+@Import({GlobalExceptionHandlerTest.ExceptionTestController.class, RateLimitConfig.class, ClockConfig.class})
 @AutoConfigureMockMvc(addFilters = false)
 @ActiveProfiles("test")
 class GlobalExceptionHandlerTest {
@@ -334,6 +344,27 @@ class GlobalExceptionHandlerTest {
 	}
 
 	/**
+	 * 요청 수 제한 초과 — 429 {@code C009} 이고 {@code fieldErrors} 는 빈 배열, {@code Retry-After}
+	 * 헤더에 제한기가 정한 초가 실린다 (sp-docs/conventions.md §6.1, sp-docs/api-contract.md §8.1 의
+	 * {@code C009} 문단·§9.13).
+	 *
+	 * <p>예외를 테스트 컨트롤러가 직접 던진다. 여기서 보는 것은 예외에서 응답으로의 매핑이고, 제한기가
+	 * 실제 경로에서 이 예외를 내는 것은 {@code MemberControllerTest} 가 본다.
+	 */
+	@Test
+	@DisplayName("요청 수 제한 초과는 429 C009 이고 fieldErrors 가 빈 배열이며 Retry-After 를 싣는다")
+	void 요청_수_제한_초과는_C009() throws Exception {
+		mockMvc.perform(get("/test/error/rate-limited"))
+				.andExpect(status().isTooManyRequests())
+				.andExpect(header().string(HttpHeaders.RETRY_AFTER, "37"))
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.data").doesNotExist())
+				.andExpect(jsonPath("$.error.code").value("C009"))
+				.andExpect(jsonPath("$.error.message").value("요청이 너무 많습니다. 잠시 후 다시 시도해 주세요."))
+				.andExpect(jsonPath("$.error.fieldErrors", hasSize(0)));
+	}
+
+	/**
 	 * <b>상태 코드보다 로그가 더 문제다</b> (sp-docs/api-contract.md §8.1). 마지막 그물은
 	 * {@code log.error} 로 스택트레이스를 남긴다.
 	 *
@@ -350,9 +381,12 @@ class GlobalExceptionHandlerTest {
 	 * <p><b>multipart 예외도 같은 자리의 문제다</b> (sp-docs/conventions.md §6.1). 핸들러가 없던
 	 * 때 실서버에서 한도를 넘는 multipart 가 마지막 그물의 ERROR 로그를 남겼다 (M-14 가 넣기 전에
 	 * 쟀다). 클라이언트 오류이므로 {@code warn} 이다.
+	 *
+	 * <p><b>요청 수 제한 초과도 {@code warn} 이다</b> — 다른 클라이언트 오류와 같은 수준이다
+	 * (§6.1 의 {@code C009} 문단). 제한에 걸린 요청이 ERROR 경보를 만들면 공격 중에 경보가 쏟아진다.
 	 */
 	@Test
-	@DisplayName("미디어 타입·multipart 예외는 ERROR 로그를 남기지 않고 마지막 그물은 ERROR 로그를 남긴다")
+	@DisplayName("미디어 타입·multipart·요청 수 제한 예외는 ERROR 로그를 남기지 않고 마지막 그물은 ERROR 로그를 남긴다")
 	void 로그_수준은_마지막_그물에서만_ERROR_다() throws Exception {
 		Logger handlerLogger = (Logger) LoggerFactory.getLogger(GlobalExceptionHandler.class);
 		ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -363,6 +397,7 @@ class GlobalExceptionHandlerTest {
 		handlerLogger.addAppender(appender);
 		List<Level> 미디어_타입_수준;
 		List<Level> multipart_수준;
+		List<Level> 제한_수준;
 		List<Level> 마지막_그물_수준;
 		try {
 			mockMvc.perform(post("/test/valid").content("{}"));
@@ -374,6 +409,10 @@ class GlobalExceptionHandlerTest {
 			mockMvc.perform(post("/test/multipart/unparsable"));
 			mockMvc.perform(multipart("/test/multipart/part"));
 			multipart_수준 = 수집된_수준(appender);
+
+			appender.list.clear();
+			mockMvc.perform(get("/test/error/rate-limited"));
+			제한_수준 = 수집된_수준(appender);
 
 			appender.list.clear();
 			mockMvc.perform(get("/test/error/unexpected"));
@@ -396,6 +435,9 @@ class GlobalExceptionHandlerTest {
 		assertThat(multipart_수준)
 				.as("multipart 예외는 클라이언트 오류이므로 warn 이다 — ERROR 경보를 만들면 안 된다")
 				.containsOnly(Level.WARN);
+		assertThat(제한_수준)
+				.as("요청 수 제한 초과는 다른 클라이언트 오류와 같은 warn 이다")
+				.containsExactly(Level.WARN);
 		assertThat(마지막_그물_수준)
 				.as("마지막 그물을 warn 으로 낮추면 원인이 서버에 있는 500 이 ERROR 경보를 만들지 않는다")
 				.containsExactly(Level.ERROR);
@@ -422,6 +464,11 @@ class GlobalExceptionHandlerTest {
 		@GetMapping("/error/access-denied")
 		void accessDenied() {
 			throw new BusinessException(ErrorCode.ACCESS_DENIED);
+		}
+
+		@GetMapping("/error/rate-limited")
+		void rateLimited() {
+			throw new RateLimitExceededException("check-nickname", 37);
 		}
 
 		@GetMapping("/error/unexpected")

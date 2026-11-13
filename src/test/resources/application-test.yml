@@ -34,3 +34,15 @@ cors:
 # 값이 없으면 SecurityConfig 의 /internal/** 체인 생성이 실패해 컨텍스트가 뜨지 않는다.
 member-service:
   internal-api-key: test-internal-api-key
+
+# 테스트 프로파일의 요청 수 제한 한도. 정본 값(application.yml 의 분당 20)을 테스트에서만 덮는다.
+# 이 값을 이 파일에 두는 것은 계획이 정했다 (sp-docs/plan/phase2-auth-member.md 의 M-15
+# 산출물·완료 기준). 운영 한도보다 크게 두는 것은 여유다 — @SpringBootTest·MockMvc 테스트는
+# 캐시된 컨텍스트의 제한기를 나눠 쓰고, 주소를 정하지 않은 요청은 기본 주소(127.0.0.1)의 한 키로
+# 세어진다. 그런 요청이 한 창에 쌓여도 제한과 무관한 테스트가 429 를 맞지 않게 둔다.
+# 창·버킷 수는 덮지 않는다 — application.yml 의 값이 그대로 쓰인다(키 단위로 합쳐진다).
+# 한도에 닿는 동작은 MemberControllerTest 가 이 값까지 보내고 시계를 움직여 본다
+rate-limit:
+  rules:
+    check-nickname:
+      limit: 100

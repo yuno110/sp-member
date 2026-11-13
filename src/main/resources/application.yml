@@ -29,6 +29,11 @@ spring:
 
 server:
   port: 8081
+  # 요청 수 제한의 키는 request.getRemoteAddr() 만 쓴다. 컨테이너가 X-Forwarded-For 로 그 주소를
+  # 바꾸지 않게 none 을 적는다 — 클라이언트가 임의로 쓰는 헤더라 믿으면 요청마다 주소를 바꿔 제한을
+  # 비켜 간다 (sp-docs/security.md §10, sp-docs/tech-stack.md §4.6). 게이트웨이·프록시 뒤에 두면
+  # 모든 요청이 한 키를 나누므로 그때는 다시 설계한다 (sp-docs/adr/0015)
+  forward-headers-strategy: none
 
 # health 만 노출한다. 그 밖의 actuator 경로는 노출 자체를 막는다
 # (sp-docs/security.md §5.1.1). 인가 쪽 차단은 SecurityConfig 가 한다
@@ -51,3 +56,15 @@ member-service:
 # 가드가 기동을 실패시킨다. 로컬 값은 application-local.yml 이 준다
 cors:
   allowed-origins: ${CORS_ALLOWED_ORIGINS}
+
+# 요청 수 제한 (sp-docs/security.md §10 표의 check-nickname 줄, sp-docs/tech-stack.md §4.6).
+#
+# 한도·창·버킷 수는 정본이 숫자를 정한 정본 값이다 — 정책값이 아니어서 여기 적는다(§4.6). 규칙이나
+# 값이 빠졌거나 양수가 아니면 기동이 실패한다(RateLimitProperties). 버킷을 고르는 HMAC 의 비밀은
+# 설정이 아니다 — 기동마다 새로 만든다.
+#
+# check-nickname 의 제한은 부하 방어다. 개인정보 보호가 아니다 (security.md §10.1)
+rate-limit:
+  buckets-per-rule: 16384
+  rules:
+    check-nickname: { limit: 20, window: PT1M }
