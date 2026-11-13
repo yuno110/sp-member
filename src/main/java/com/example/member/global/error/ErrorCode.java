@@ -26,6 +26,12 @@ public enum ErrorCode {
 	INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "C005", "서버 내부 오류가 발생했습니다."),
 	UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "C006", "지원하지 않는 미디어 타입입니다."),
 	NOT_ACCEPTABLE(HttpStatus.NOT_ACCEPTABLE, "C007", "응답할 수 있는 형식이 없습니다."),
+	// member 는 multipart 를 받지 않지만 프레임워크가 어느 경로에서든 크기 위반을 던질 수 있어
+	// 같은 매핑을 갖는다 (§8.1 의 C008 문단)
+	PAYLOAD_TOO_LARGE(HttpStatus.PAYLOAD_TOO_LARGE, "C008", "요청 크기가 허용 한도를 넘었습니다."),
+	// 요청 수 제한 초과 (sp-docs/security.md §10). 이 코드로의 매핑은 제한기의 예외와 함께
+	// 둔다 (§8.1 의 C009 문단, sp-docs/conventions.md §6.1)
+	TOO_MANY_REQUESTS(HttpStatus.TOO_MANY_REQUESTS, "C009", "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요."),
 
 	UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "A001", "인증이 필요합니다."),
 	INVALID_TOKEN(HttpStatus.UNAUTHORIZED, "A002", "유효하지 않은 토큰입니다."),

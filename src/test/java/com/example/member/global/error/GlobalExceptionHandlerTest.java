@@ -5,6 +5,7 @@ import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.hasSize;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -35,7 +36,11 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.multipart.MultipartFile;
 
 /**
  * sp-docs/plan/phase1.md §5 M-02 의 "검증" 표와 sp-docs/conventions.md §6.1 의 예외-코드 표를
@@ -280,6 +285,55 @@ class GlobalExceptionHandlerTest {
 	}
 
 	/**
+	 * 크기 한도를 넘은 multipart — {@code MaxUploadSizeExceededException}.
+	 *
+	 * <p><b>예외를 테스트 컨트롤러가 직접 던진다.</b> 실서버에서는 서블릿 컨테이너가 한도를 집행할
+	 * 때 이 예외가 나는데 {@code MockMvc} 는 그 한도를 거치지 않는다 (sp-docs/conventions.md §6.1
+	 * 의 블록인용). 여기서 보는 것은 예외에서 코드로의 매핑이다.
+	 *
+	 * <p>{@code MultipartException} 의 하위 타입이다. 상위 타입의 핸들러만 있으면 이 요청이 400
+	 * {@code C001} 이 되므로 413 {@code C008} 단언이 그 실수를 잡는다.
+	 */
+	@Test
+	@DisplayName("multipart 크기 한도 위반은 413 C008 이고 fieldErrors 가 빈 배열이다")
+	void multipart_크기_위반은_C008() throws Exception {
+		mockMvc.perform(post("/test/multipart/too-large"))
+				.andExpect(status().is(413))
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.data").doesNotExist())
+				.andExpect(jsonPath("$.error.code").value("C008"))
+				.andExpect(jsonPath("$.error.message").value("요청 크기가 허용 한도를 넘었습니다."))
+				.andExpect(jsonPath("$.error.fieldErrors", hasSize(0)));
+	}
+
+	/** multipart 를 해석하지 못했다 — {@code MultipartException}. 위와 같은 이유로 직접 던진다. */
+	@Test
+	@DisplayName("해석할 수 없는 multipart 는 400 C001 이고 fieldErrors 가 빈 배열이다")
+	void multipart_해석_실패는_C001() throws Exception {
+		mockMvc.perform(post("/test/multipart/unparsable"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.error.code").value("C001"))
+				.andExpect(jsonPath("$.error.message").value("잘못된 입력값입니다."))
+				.andExpect(jsonPath("$.error.fieldErrors", hasSize(0)));
+	}
+
+	/**
+	 * 필요한 파트가 없다 — {@code MissingServletRequestPartException}. 이 예외는 인자 해석에서
+	 * 나므로 {@code MockMvc} 로 그대로 일으킨다.
+	 */
+	@Test
+	@DisplayName("필요한 파트가 빠진 multipart 는 400 C001 이고 fieldErrors 가 빈 배열이다")
+	void 파트_누락은_C001() throws Exception {
+		mockMvc.perform(multipart("/test/multipart/part"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.error.code").value("C001"))
+				.andExpect(jsonPath("$.error.message").value("잘못된 입력값입니다."))
+				.andExpect(jsonPath("$.error.fieldErrors", hasSize(0)));
+	}
+
+	/**
 	 * <b>상태 코드보다 로그가 더 문제다</b> (sp-docs/api-contract.md §8.1). 마지막 그물은
 	 * {@code log.error} 로 스택트레이스를 남긴다.
 	 *
@@ -292,9 +346,13 @@ class GlobalExceptionHandlerTest {
 	 *
 	 * <p>수집한 수준을 한 묶음으로 합치면 어느 요청이 낸 것인지 알 수 없으므로, 요청 묶음마다
 	 * 따로 수집해 각 묶음에 단언을 붙인다.
+	 *
+	 * <p><b>multipart 예외도 같은 자리의 문제다</b> (sp-docs/conventions.md §6.1). 핸들러가 없던
+	 * 때 실서버에서 한도를 넘는 multipart 가 마지막 그물의 ERROR 로그를 남겼다 (M-14 가 넣기 전에
+	 * 쟀다). 클라이언트 오류이므로 {@code warn} 이다.
 	 */
 	@Test
-	@DisplayName("미디어 타입 예외는 ERROR 로그를 남기지 않고 마지막 그물은 ERROR 로그를 남긴다")
+	@DisplayName("미디어 타입·multipart 예외는 ERROR 로그를 남기지 않고 마지막 그물은 ERROR 로그를 남긴다")
 	void 로그_수준은_마지막_그물에서만_ERROR_다() throws Exception {
 		Logger handlerLogger = (Logger) LoggerFactory.getLogger(GlobalExceptionHandler.class);
 		ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -304,11 +362,18 @@ class GlobalExceptionHandlerTest {
 		handlerLogger.setLevel(Level.TRACE);
 		handlerLogger.addAppender(appender);
 		List<Level> 미디어_타입_수준;
+		List<Level> multipart_수준;
 		List<Level> 마지막_그물_수준;
 		try {
 			mockMvc.perform(post("/test/valid").content("{}"));
 			mockMvc.perform(get("/test/success").accept(MediaType.APPLICATION_XML));
 			미디어_타입_수준 = 수집된_수준(appender);
+
+			appender.list.clear();
+			mockMvc.perform(post("/test/multipart/too-large"));
+			mockMvc.perform(post("/test/multipart/unparsable"));
+			mockMvc.perform(multipart("/test/multipart/part"));
+			multipart_수준 = 수집된_수준(appender);
 
 			appender.list.clear();
 			mockMvc.perform(get("/test/error/unexpected"));
@@ -325,6 +390,12 @@ class GlobalExceptionHandlerTest {
 		assertThat(미디어_타입_수준)
 				.as("클라이언트 실수가 ERROR 경보를 만들면 안 된다")
 				.doesNotContain(Level.ERROR);
+		assertThat(multipart_수준)
+				.as("셋 다 핸들러에 걸려야 한다. 비어 있으면 로그 수집이 안 된 것이다")
+				.hasSize(3);
+		assertThat(multipart_수준)
+				.as("multipart 예외는 클라이언트 오류이므로 warn 이다 — ERROR 경보를 만들면 안 된다")
+				.containsOnly(Level.WARN);
 		assertThat(마지막_그물_수준)
 				.as("마지막 그물을 warn 으로 낮추면 원인이 서버에 있는 500 이 ERROR 경보를 만들지 않는다")
 				.containsExactly(Level.ERROR);
@@ -377,6 +448,21 @@ class GlobalExceptionHandlerTest {
 
 		@PostMapping("/valid")
 		ApiResponse<Payload> valid(@Valid @RequestBody SampleRequest request) {
+			return ApiResponse.success(new Payload("ok"));
+		}
+
+		@PostMapping("/multipart/too-large")
+		void multipartTooLarge() {
+			throw new MaxUploadSizeExceededException(1024 * 1024);
+		}
+
+		@PostMapping("/multipart/unparsable")
+		void multipartUnparsable() {
+			throw new MultipartException("Failed to parse multipart servlet request");
+		}
+
+		@PostMapping("/multipart/part")
+		ApiResponse<Payload> multipartPart(@RequestPart("file") MultipartFile file) {
 			return ApiResponse.success(new Payload("ok"));
 		}
 

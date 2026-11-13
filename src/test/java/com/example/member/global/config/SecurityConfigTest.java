@@ -19,10 +19,13 @@ import com.example.securityprobe.CurrentMemberProbeController;
 import java.lang.reflect.RecordComponent;
 import java.util.Arrays;
 import java.util.List;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -82,6 +85,9 @@ class SecurityConfigTest {
 	@ParameterizedTest(name = "{0} {1}")
 	@CsvSource({
 			"POST,/api/v1/members",
+			// 프로필 일괄 조회 (sp-docs/api-contract.md §3.2). /members/{accountId} 의 permitAll 이
+			// 이 경로를 열지 않는다
+			"GET,/api/v1/members",
 			"GET,/api/v1/members/me",
 			"PATCH,/api/v1/members/me",
 			"DELETE,/api/v1/members/me"
@@ -389,6 +395,45 @@ class SecurityConfigTest {
 				"A002", "유효하지 않은 토큰입니다.");
 	}
 
+	/**
+	 * 무인증 경로에 잘못된 토큰을 실어도 인증 경로와 같은 401 코드다.
+	 *
+	 * <p>sp-docs/plan/phase2-auth-member.md 의 M-14 가 정한 테스트다. 화면이 무인증 요청에 저장된
+	 * 토큰을 실을 때의 응답을 고정한다. 코드의 경계는 sp-docs/api-contract.md §8.5 의 표다.
+	 *
+	 * <p>Bearer 토큰 필터는 인가 규칙과 무관하게 실린 토큰을 검증하고, 실패하면 인가에 닿기 전에
+	 * 끊는다. 그래서 기대값이 위의 인증 경로 테스트와 같다.
+	 *
+	 * <p><b>케이스는 토큰 자체가 거부되는 것만 둔다</b> — 문법 위반, JWT 가 아님, 서명 불일치,
+	 * 만료. claim 계약 위반(예: 열거 밖 {@code role})은 여기서 단언하지 않는다 — M-14 가 그 결과는
+	 * 단언하지 말고 관측해 보고하라고 정했고, 무인증 경로의 그 응답은 같은 계획 §5.3 이 정본 개정으로
+	 * 넘겼다. member 는 그 계약을 디코더에서 집행한다(§8.5 의 블록인용).
+	 */
+	@ParameterizedTest(name = "GET {0} + {1}")
+	@MethodSource("무인증_경로와_거부되는_토큰")
+	@DisplayName("무인증 경로에 거부되는 토큰을 실으면 인증 경로와 같은 401 코드다")
+	void 무인증_경로의_잘못된_토큰(String path, String variant, String authorization, String code,
+			String message) throws Exception {
+		this.mockMvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, authorization))
+				.andExpect(status().isUnauthorized())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.error.code").value(code))
+				.andExpect(jsonPath("$.error.message").value(message));
+	}
+
+	static Stream<Arguments> 무인증_경로와_거부되는_토큰() {
+		List<List<String>> tokens = List.of(
+				List.of("b64token 문법 위반", "Bearer not!a!token", "A001", "인증이 필요합니다."),
+				List.of("JWT 가 아닌 값", "Bearer notajwt", "A002", "유효하지 않은 토큰입니다."),
+				List.of("서명 불일치", "Bearer " + TestTokenFactory.tamperedToken(ACCOUNT_ID, "USER"),
+						"A002", "유효하지 않은 토큰입니다."),
+				List.of("만료", "Bearer " + TestTokenFactory.expiredToken(ACCOUNT_ID, "USER"),
+						"A003", "만료된 토큰입니다."));
+		return Stream.of("/api/v1/members/1", "/api/v1/members/check-nickname")
+				.flatMap(path -> tokens.stream()
+						.map(token -> Arguments.of(path, token.get(0), token.get(1), token.get(2), token.get(3))));
+	}
+
 	@ParameterizedTest(name = "role = {0}")
 	@ValueSource(strings = {"USER", "ADMIN"})
 	@DisplayName("계약의 열거 값인 role 은 그대로 통과한다")
@@ -414,7 +459,7 @@ class SecurityConfigTest {
 	// --- CORS (sp-docs/security.md §1.1) ---
 
 	@Test
-	@DisplayName("CORS 의 메서드·헤더·allowCredentials 가 정본 값이고 * 가 없다")
+	@DisplayName("CORS 의 메서드·헤더·allowCredentials·노출 헤더가 정본 값이고 * 가 없다")
 	void cors_설정값이_정본과_일치한다() {
 		assertThat(this.corsConfigurationSource).isInstanceOf(UrlBasedCorsConfigurationSource.class);
 		CorsConfiguration configuration =
@@ -431,6 +476,10 @@ class SecurityConfigTest {
 		assertThat(configuration.getAllowCredentials())
 				.as("토큰을 Authorization 헤더로 보내므로 쿠키를 허용할 이유가 없다")
 				.isFalse();
+		assertThat(configuration.getExposedHeaders())
+				.as("노출하지 않으면 브라우저가 Retry-After 를 스크립트에 숨겨 화면이 429 뒤 언제 다시 할지 "
+						+ "말할 수 없다 (sp-docs/security.md §1.1)")
+				.containsExactly("Retry-After");
 	}
 
 	@Test

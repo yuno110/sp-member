@@ -9,6 +9,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -130,6 +131,11 @@ public class SecurityConfig {
 						// 규칙이 이기므로 순서를 바꾸면 내 프로필이 무인증으로 열린다
 						.requestMatchers("/api/v1/members/me").authenticated()
 						.requestMatchers(HttpMethod.POST, "/api/v1/members").authenticated()
+						// 프로필 일괄 조회 (sp-docs/api-contract.md §3.2). ADMIN 판정은 Service 가
+						// role 값으로 한다 — 여기는 인증만 요구한다. 아래 {accountId} 의 permitAll 은
+						// 세그먼트가 하나 더 있어야 걸리므로 이 경로를 열지 않는다. 이 줄이 없어도
+						// anyRequest() 가 막지만 경로마다 규칙을 두는 방식을 따른다 (§3.2)
+						.requestMatchers(HttpMethod.GET, "/api/v1/members").authenticated()
 						.requestMatchers(HttpMethod.GET, "/api/v1/members/check-nickname").permitAll()
 						.requestMatchers(HttpMethod.GET, "/api/v1/members/{accountId}").permitAll()
 
@@ -168,7 +174,7 @@ public class SecurityConfig {
 	 * <p>비었거나 {@code *} 가 섞여 들어오면 기동을 실패시킨다. <b>값이 환경에서 오므로 §1.1 의
 	 * 금지를 지키는 지점은 이 가드뿐이다</b> — "설정에 {@code *} 가 없다"는 그 절반이다.
 	 *
-	 * <p>허용 메서드·헤더·{@code allowCredentials} 는 §1.1 이 정본으로 고정한 값이다.
+	 * <p>허용 메서드·헤더·{@code allowCredentials}·노출 헤더는 §1.1 이 정본으로 고정한 값이다.
 	 *
 	 * <p><b>CORS 는 {@code WebConfig} 가 아니라 여기에 둔다.</b> preflight(OPTIONS)는 인가
 	 * 필터보다 앞에서 처리돼야 한다 — MVC 쪽에만 두면 preflight 가 401 로 막힌다 (§1.1).
@@ -198,6 +204,10 @@ public class SecurityConfig {
 				HttpMethod.GET.name(), HttpMethod.POST.name(),
 				HttpMethod.PATCH.name(), HttpMethod.DELETE.name()));
 		configuration.setAllowedHeaders(List.of("Authorization", "Content-Type"));
+		// 브라우저는 교차 출처 응답에서 단순 응답 헤더가 아닌 헤더를 스크립트에 숨긴다.
+		// Retry-After 가 그렇다 — 노출하지 않으면 화면이 429 를 받고도 언제 다시 할지 말할 수
+		// 없다 (sp-docs/security.md §1.1). 429 자체는 요청 수 제한이 만든다 (§10)
+		configuration.setExposedHeaders(List.of(HttpHeaders.RETRY_AFTER));
 		// 토큰을 Authorization 헤더로 보내므로 쿠키가 필요 없다 (sp-docs/security.md §1.1)
 		configuration.setAllowCredentials(false);
 

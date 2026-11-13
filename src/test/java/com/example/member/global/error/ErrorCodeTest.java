@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test;
  *
  * <p>집합 비교이므로 정본에 없는 코드가 하나라도 있으면 실패한다. {@code M002}·{@code M004}·
  * {@code M005} 를 다시 끌어오는 실수가 여기서 잡힌다 (§8.2 — 번호는 재사용하지 않는다).
+ * 같은 이유로 {@code C008}·{@code C009} 를 공통 코드가 아니라 member 접두어로 더하는 실수도
+ * 잡힌다 (§8.1 이 두 코드를 공통으로 둔 이유를 적는다).
  */
 class ErrorCodeTest {
 
@@ -29,6 +31,8 @@ class ErrorCodeTest {
 		contract.put("C005", "500 서버 내부 오류가 발생했습니다.");
 		contract.put("C006", "415 지원하지 않는 미디어 타입입니다.");
 		contract.put("C007", "406 응답할 수 있는 형식이 없습니다.");
+		contract.put("C008", "413 요청 크기가 허용 한도를 넘었습니다.");
+		contract.put("C009", "429 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.");
 		contract.put("A001", "401 인증이 필요합니다.");
 		contract.put("A002", "401 유효하지 않은 토큰입니다.");
 		contract.put("A003", "401 만료된 토큰입니다.");
