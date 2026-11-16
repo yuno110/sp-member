@@ -23,7 +23,11 @@ import com.jayway.jsonpath.JsonPath;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
+import java.util.stream.LongStream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -56,8 +60,8 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
  * <p><b>경로별 인가 행렬은 {@code SecurityConfigTest} 가 본다.</b> 여기서 토큰 없는 접근을 보는
  * 것은 응답 본문과 "저장되지 않았다"·"바뀌지 않았다" 까지 함께 단언하는 경우뿐이다.
  *
- * <p>픽스처의 {@code accountId} 는 M-05 가 211~, M-08 이 251~, <b>M-09 가 281~288</b> 을
- * 쓰고, 닉네임은
+ * <p>픽스처의 {@code accountId} 는 M-05 가 211~, M-08 이 251~, <b>M-09 가 281~288</b>, M-16 이
+ * 311~ 을 쓰고, 닉네임은
  * {@code 관리자} 가 아닌 값을 쓴다. ADMIN seed 가 {@code (1, '관리자')} 를 넣으므로 겹치면 UNIQUE
  * 위반으로 깨진다 (sp-docs/requirements/member.md §10.1). M-08 의 {@code MemberServiceTest}
  * 픽스처(241~)와도 범위를 겹치지 않게 둔다.
@@ -81,6 +85,28 @@ class MemberControllerTest {
 	private static final Long SEED_ACCOUNT_ID = 1L;
 
 	private static final String SEED_NICKNAME = "관리자";
+
+	/**
+	 * 프로필 일괄 조회의 호출자로 쓰는 <b>seed 가 아닌 계정</b>이다({@link #일괄_조회}). 이 계정의
+	 * 프로필은 등록하지 않는다.
+	 *
+	 * <p><b>ADMIN 판정은 이 계정과 seed 계정에 각각 {@code ADMIN}·{@code USER} 토큰을 실은 네 조합으로
+	 * 본다</b> — 두 계정 모두 {@code ADMIN} 이면 200 이고 {@code USER} 면 403 {@code A004} 다. 같은
+	 * {@code role} 인데 계정에 따라 결과가 갈리는 구현은 네 조합 중 하나에서 빨개진다. 조합마다
+	 * 빨개지는 모양은 이렇다(M-16 이 변이로 쟀다).
+	 *
+	 * <ul>
+	 * <li>이 계정의 {@code ADMIN}(200 을 기대하는 일괄 조회 테스트들) — 「{@code role} 을 보지 않고
+	 * seed 만 허용」, 「{@code ADMIN} 이고 seed 일 때만 허용」
+	 * <li>seed 계정의 {@code USER}({@link #USER_토큰_일괄_조회}) — 「{@code role} 을 보지 않고 seed 만
+	 * 허용」, 「{@code ADMIN} 이거나 seed 면 허용」
+	 * <li>이 계정의 {@code USER}({@link #seed_가_아닌_계정의_USER_토큰_일괄_조회}) — 「{@code role} 을
+	 * 보지 않고 seed 만 거부」
+	 * <li>seed 계정의 {@code ADMIN}({@link #seed_계정의_ADMIN_토큰_일괄_조회}) — 「{@code role} 을 보지
+	 * 않고 seed 만 거부」, 「{@code ADMIN} 이고 seed 가 아닐 때만 허용」
+	 * </ul>
+	 */
+	private static final long NON_SEED_CALLER_ID = 399L;
 
 	/** sp-docs/requirements/member.md §2 가 정한 닉네임 메시지다. */
 	private static final String NICKNAME_MESSAGE = "닉네임은 2~10자여야 합니다.";
@@ -1265,6 +1291,356 @@ class MemberControllerTest {
 		assertThat(JsonPath.<Map<String, Object>>read(공개, "$.data"))
 				.as("같은 계정의 공개 조회는 네 키다 — 두 매핑이 함께 살아 있다")
 				.containsOnlyKeys("accountId", "nickname", "createdAt", "deleted");
+	}
+
+	// --- 프로필 일괄 조회 (M-16, sp-docs/api-contract.md §3.2) ---
+	//
+	// 호출자는 따로 적지 않으면 seed 가 아닌 계정(NON_SEED_CALLER_ID)이다. ADMIN 판정은 그 계정과
+	// seed 계정에 각각 ADMIN·USER 토큰을 실은 네 조합으로 본다(NON_SEED_CALLER_ID 의 javadoc).
+	// 조회 대상과 호출자의 프로필은 무관하다.
+	// 픽스처를 accountId 오름차순이 아닌 순서로 등록한다 — 삽입 순서대로 돌려주는 구현이 순서
+	// 단언을 우연히 통과하지 않게 한다
+
+	/**
+	 * 검증표: <b>ADMIN, {@code accountIds=3,1} → 200, {@code accountId} 1·3 의 순서</b>. 완료
+	 * 기준: <b>원소가 §3.1 의 공개 조회와 같은 모양이다</b> (sp-docs/api-contract.md §3.2).
+	 *
+	 * <p>id 셋을 오름차순도 내림차순도 아닌 순서로 보낸다 — 둘이면 요청 순서를 뒤집는 구현도
+	 * 통과한다. 조회에서 {@code ORDER BY} 가 빠진 것은 이 단언이 H2 에서 잡지 못한다 —
+	 * {@code MemberServiceTest.일괄_조회의_정렬} 이 일괄 조회가 낸 SQL 을 보고 잡는다.
+	 *
+	 * <p><b>원소를 같은 id 의 {@code GET /{accountId}} 응답과 통째로 비교한다.</b> 키 집합과 값이
+	 * 함께 같아야 하므로 원소에 키를 더하거나 빼거나 값을 다르게 변환한 구현이 여기서 빨개진다.
+	 */
+	@Test
+	@DisplayName("ADMIN 의 일괄 조회는 200 이고 accountId 오름차순이며 원소가 공개 조회의 응답과 같다")
+	void 일괄_조회_오름차순과_원소_모양() throws Exception {
+		등록한다(312L, "일괄둘째");
+		등록한다(313L, "일괄셋째");
+		등록한다(311L, "일괄첫째");
+
+		String 본문 = this.mockMvc.perform(일괄_조회("ADMIN", "accountIds=313,311,312"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.success").value(true))
+				.andExpect(jsonPath("$.error").doesNotExist())
+				.andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+		assertThat(JsonPath.<Map<String, Object>>read(본문, "$.data"))
+				.as("data 의 키는 members 다 (sp-docs/api-contract.md §3.2)")
+				.containsOnlyKeys("members");
+		List<Map<String, Object>> members = JsonPath.read(본문, "$.data.members");
+		assertThat(members).extracting(member -> member.get("accountId"))
+				.as("accountId 오름차순이다 (§3.2) — 요청 순서가 아니다")
+				.containsExactly(311, 312, 313);
+		for (Map<String, Object> member : members) {
+			assertThat(member)
+					.as("원소는 GET /{accountId} 의 data 와 같다 (§3.2)")
+					.isEqualTo(공개_조회_data(((Number) member.get("accountId")).longValue()));
+		}
+	}
+
+	/** 검증표: <b>{@code accountIds=1&accountIds=2} → 둘 다</b> (sp-docs/api-contract.md §3.2). */
+	@Test
+	@DisplayName("같은 이름을 되풀이한 accountIds 도 받는다")
+	void 같은_이름의_반복() throws Exception {
+		등록한다(312L, "반복둘째");
+		등록한다(311L, "반복첫째");
+
+		this.mockMvc.perform(일괄_조회("ADMIN", "accountIds=312&accountIds=311"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.members", hasSize(2)))
+				.andExpect(jsonPath("$.data.members[0].accountId").value(311))
+				.andExpect(jsonPath("$.data.members[0].nickname").value("반복첫째"))
+				.andExpect(jsonPath("$.data.members[1].accountId").value(312))
+				.andExpect(jsonPath("$.data.members[1].nickname").value("반복둘째"));
+	}
+
+	/**
+	 * 검증표: <b>없는 id 가 섞였다 → 빠진다</b>. 404 가 아니다 — 프로필이 없는 계정(가입 3단계
+	 * 미완료)이 정상이라 화면이 「프로필 없음」 으로 그린다 (sp-docs/api-contract.md §3.2). 전부
+	 * 없으면 빈 배열이다.
+	 *
+	 * <p><b>무엇을 깨뜨릴 수 있는지</b>: 공개 조회의 결론(없으면 {@code M001})을 옮겨 온 구현은
+	 * 404 로 빨개진다.
+	 */
+	@Test
+	@DisplayName("프로필이 없는 accountId 는 빠지고 전부 없으면 빈 배열이다 — 404 가 아니다")
+	void 없는_id_는_빠진다() throws Exception {
+		등록한다(311L, "있는프로필");
+		assertThat(this.memberRepository.findByAccountId(319L))
+				.as("이 accountId 로는 등록하지 않았다")
+				.isEmpty();
+
+		this.mockMvc.perform(일괄_조회("ADMIN", "accountIds=319,311"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.members", hasSize(1)))
+				.andExpect(jsonPath("$.data.members[0].accountId").value(311));
+
+		this.mockMvc.perform(일괄_조회("ADMIN", "accountIds=319"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.success").value(true))
+				.andExpect(jsonPath("$.data.members", hasSize(0)));
+	}
+
+	/** 검증표: <b>같은 id 두 번 → 한 번</b> (sp-docs/api-contract.md §3.2). */
+	@Test
+	@DisplayName("같은 accountId 를 두 번 주면 한 번만 싣는다")
+	void 같은_id_는_한_번() throws Exception {
+		등록한다(311L, "한번만");
+
+		this.mockMvc.perform(일괄_조회("ADMIN", "accountIds=311,311"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.members", hasSize(1)))
+				.andExpect(jsonPath("$.data.members[0].accountId").value(311));
+	}
+
+	/**
+	 * 검증표: <b>탈퇴한 프로필 → {@code "탈퇴한 회원"}, {@code deleted: true}</b>
+	 * (sp-docs/api-contract.md §3.2). 마스킹 규칙은 하나다 — 원소가 같은 id 의 공개 조회와 같다.
+	 *
+	 * <p><b>무엇을 깨뜨릴 수 있는지</b>: 조회에 {@code deleted = false} 조건을 넣은 구현은 원소가
+	 * 없어 빨개지고, 저장값(NULL)을 그대로 실은 구현은 닉네임 단언에서 빨개진다.
+	 */
+	@Test
+	@DisplayName("탈퇴한 프로필은 \"탈퇴한 회원\"·deleted true 로 실리고 공개 조회와 같은 원소다")
+	void 탈퇴한_프로필_일괄_조회() throws Exception {
+		등록한다(314L, "일괄탈퇴전");
+		this.mockMvc.perform(탈퇴(314L)).andExpect(status().isNoContent());
+
+		String 본문 = this.mockMvc.perform(일괄_조회("ADMIN", "accountIds=314"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.members", hasSize(1)))
+				.andExpect(jsonPath("$.data.members[0].accountId").value(314))
+				.andExpect(jsonPath("$.data.members[0].nickname").value("탈퇴한 회원"))
+				.andExpect(jsonPath("$.data.members[0].deleted").value(true))
+				.andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+		assertThat(JsonPath.<Map<String, Object>>read(본문, "$.data.members[0]"))
+				.as("마스킹 규칙은 하나다 — 공개 조회와 같은 원소다 (§3.2)")
+				.isEqualTo(공개_조회_data(314L));
+	}
+
+	/**
+	 * 개수가 §3.2 의 범위 안인 양 끝(1개·50개)은 200 이다. 거부하는 쪽만 보면 하한을 올리거나
+	 * 상한을 내리는 어긋남이 조용하다 (sp-docs/conventions.md §9.2).
+	 *
+	 * <p>등록한 프로필을 목록에 넣어 결과가 실제로 실리는 것까지 본다. <b>등록하는 것은 목록의 마지막
+	 * id 다.</b> 첫 id 를 등록하면 두 개수 모두에서 등록한 id 가 목록의 맨 앞이라, 목록의 앞부분만
+	 * 읽는 구현(서비스가 앞의 49개만 조회하는 변이)이 50개에서도 통과했다(M-16 이 변이로 쟀다).
+	 */
+	@ParameterizedTest(name = "{0}개")
+	@ValueSource(ints = {1, 50})
+	@DisplayName("accountIds 가 1개·50개면 200 이다")
+	void 개수_범위_안(int count) throws Exception {
+		int 마지막_id = 311 + count - 1;
+		등록한다(마지막_id, "범위안");
+
+		this.mockMvc.perform(일괄_조회("ADMIN", "accountIds=" + 연속_id(311L, count)))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.members", hasSize(1)))
+				.andExpect(jsonPath("$.data.members[0].accountId").value(마지막_id));
+	}
+
+	/**
+	 * 검증표: <b>최대보다 많은 id → 400 {@code C001}, {@code fieldErrors} 에 {@code accountIds}</b>.
+	 * <b>절삭하지 않는다</b> — 앞의 50개로 200 을 주면 잘린 id 의 프로필이 조용히 빠진다
+	 * (sp-docs/api-contract.md §3.2). 경계는 양쪽이므로 (sp-docs/conventions.md §9.2) 바로 바깥의 다른
+	 * 쪽인 0개({@code accountIds=})도 본다 — 범위 밖이면 같은 응답이다 (sp-docs/plan/phase2-auth-member.md
+	 * 의 M-16 완료 기준).
+	 */
+	@ParameterizedTest(name = "{0}개")
+	@ValueSource(ints = {0, 51})
+	@DisplayName("accountIds 가 0개·51개면 400 C001 이고 fieldErrors 에 accountIds 다 — 절삭하지 않는다")
+	void 개수_범위_밖(int count) throws Exception {
+		등록한다(311L, "범위밖");
+
+		this.mockMvc.perform(일괄_조회("ADMIN", "accountIds=" + 연속_id(311L, count)))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.data").doesNotExist())
+				.andExpect(jsonPath("$.error.code").value("C001"))
+				.andExpect(jsonPath("$.error.fieldErrors", hasSize(1)))
+				.andExpect(jsonPath("$.error.fieldErrors[0].field").value("accountIds"));
+	}
+
+	/**
+	 * 개수는 보낸 값의 수다 — 되풀이한 id 도 센다 ({@code MemberController#getProfiles}). 같은 id
+	 * 51번은 한 원소로 실릴 목록이지만 50개를 넘는다.
+	 */
+	@Test
+	@DisplayName("되풀이한 id 도 개수에 세어 51개면 400 C001 이다")
+	void 되풀이한_id_도_센다() throws Exception {
+		String 같은_id_51번 = String.join(",", Collections.nCopies(51, "311"));
+
+		this.mockMvc.perform(일괄_조회("ADMIN", "accountIds=" + 같은_id_51번))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.error.code").value("C001"))
+				.andExpect(jsonPath("$.error.fieldErrors[0].field").value("accountIds"));
+	}
+
+	/**
+	 * 검증표: <b>{@code accountIds} 누락 → 400 {@code C001}, {@code fieldErrors} 빈 배열</b> — 바인딩
+	 * 자체가 일어나지 않아 담을 필드가 없다 (sp-docs/api-contract.md §3.2 §2.3).
+	 */
+	@Test
+	@DisplayName("accountIds 가 없으면 400 C001 이고 fieldErrors 가 빈 배열이다")
+	void accountIds_누락() throws Exception {
+		this.mockMvc.perform(일괄_조회("ADMIN", ""))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.error.code").value("C001"))
+				.andExpect(jsonPath("$.error.fieldErrors", hasSize(0)));
+	}
+
+	/**
+	 * 검증표: <b>{@code accountIds=abc} → 400 {@code C002}</b> (sp-docs/api-contract.md §3.2).
+	 * 숫자가 아닌 원소가 하나만 섞여도, 되풀이한 이름 쪽에 있어도 같다 — 나머지 id 로 200 을 주지
+	 * 않는다.
+	 */
+	@ParameterizedTest(name = "{0}")
+	@ValueSource(strings = {"accountIds=abc", "accountIds=311,abc", "accountIds=311&accountIds=abc"})
+	@DisplayName("숫자가 아닌 accountIds 는 400 C002 다")
+	void 숫자가_아닌_값(String query) throws Exception {
+		등록한다(311L, "형식확인");
+
+		this.mockMvc.perform(일괄_조회("ADMIN", query))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.data").doesNotExist())
+				.andExpect(jsonPath("$.error.code").value("C002"));
+	}
+
+	/**
+	 * 빈 원소는 원소의 {@code @NotNull} 이 거부한다 — 400 {@code C001} 이고 (sp-docs/conventions.md
+	 * §6.1), 빈 원소마다 {@code fieldErrors} 에 {@code accountIds} 1건이다
+	 * ({@code MemberController#getProfiles}). 쉼표 목록 안·끝, 되풀이한 이름의 빈 값을 함께 본다 —
+	 * 세 입력 모두 빈 원소가 하나라 {@code fieldErrors} 가 1건이다.
+	 *
+	 * <p><b>무엇을 깨뜨릴 수 있는지</b>: 원소의 {@code @NotNull} 을 뺀 구현은 세 입력 모두 200 으로
+	 * 빨개진다 — 빈 원소가 {@code null} 로 조회에 실려 조용히 빠진다(M-16 이 변이로 쟀다).
+	 */
+	@ParameterizedTest(name = "{0}")
+	@ValueSource(strings = {"accountIds=311,,312", "accountIds=311,", "accountIds=311&accountIds="})
+	@DisplayName("빈 원소가 있으면 400 C001 이고 fieldErrors 에 accountIds 다")
+	void 빈_원소(String query) throws Exception {
+		등록한다(311L, "빈원소확인");
+
+		this.mockMvc.perform(일괄_조회("ADMIN", query))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.data").doesNotExist())
+				.andExpect(jsonPath("$.error.code").value("C001"))
+				.andExpect(jsonPath("$.error.fieldErrors", hasSize(1)))
+				.andExpect(jsonPath("$.error.fieldErrors[0].field").value("accountIds"));
+	}
+
+	/**
+	 * 검증표: <b>USER 토큰 → 403 {@code A004}</b> (sp-docs/api-contract.md §3.2,
+	 * sp-docs/security.md §5.1). 등록해 둔 id 를 묻는다 — 거부가 빈 결과로 위장되지 않고 원소도
+	 * 실리지 않는다.
+	 *
+	 * <p><b>토큰의 계정은 seed 다</b> — ADMIN 판정을 보는 네 조합 중 하나다
+	 * ({@link #NON_SEED_CALLER_ID}).
+	 */
+	@Test
+	@DisplayName("seed 계정의 USER 토큰이어도 일괄 조회는 403 A004 이고 원소를 싣지 않는다")
+	void USER_토큰_일괄_조회() throws Exception {
+		등록한다(311L, "일반사용자");
+
+		this.mockMvc.perform(get(PATH + "?accountIds=311")
+						.header(HttpHeaders.AUTHORIZATION,
+								"Bearer " + TestTokenFactory.accessToken(SEED_ACCOUNT_ID, "USER")))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.data").doesNotExist())
+				.andExpect(jsonPath("$.error.code").value("A004"))
+				.andExpect(jsonPath("$.error.message").value("권한이 없습니다."));
+	}
+
+	/**
+	 * seed 가 아닌 계정의 USER 토큰도 403 {@code A004} 다 — ADMIN 판정을 보는 네 조합 중 하나다
+	 * ({@link #NON_SEED_CALLER_ID}). {@code role} 을 보지 않고 seed 계정만 거부하는 구현이 여기서
+	 * 빨개진다.
+	 */
+	@Test
+	@DisplayName("seed 가 아닌 계정의 USER 토큰도 일괄 조회는 403 A004 이고 원소를 싣지 않는다")
+	void seed_가_아닌_계정의_USER_토큰_일괄_조회() throws Exception {
+		등록한다(311L, "일반계정");
+
+		this.mockMvc.perform(일괄_조회("USER", "accountIds=311"))
+				.andExpect(status().isForbidden())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.data").doesNotExist())
+				.andExpect(jsonPath("$.error.code").value("A004"));
+	}
+
+	/**
+	 * seed 계정의 ADMIN 토큰도 200 이다 — ADMIN 판정을 보는 네 조합 중 하나다
+	 * ({@link #NON_SEED_CALLER_ID}). 계정이 seed 면 거부하는 구현이 여기서 빨개진다.
+	 */
+	@Test
+	@DisplayName("seed 계정의 ADMIN 토큰이면 일괄 조회는 200 이고 원소를 싣는다")
+	void seed_계정의_ADMIN_토큰_일괄_조회() throws Exception {
+		등록한다(311L, "시드관리확인");
+
+		this.mockMvc.perform(get(PATH + "?accountIds=311")
+						.header(HttpHeaders.AUTHORIZATION,
+								"Bearer " + TestTokenFactory.accessToken(SEED_ACCOUNT_ID, "ADMIN")))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.success").value(true))
+				.andExpect(jsonPath("$.data.members", hasSize(1)))
+				.andExpect(jsonPath("$.data.members[0].accountId").value(311))
+				.andExpect(jsonPath("$.data.members[0].nickname").value("시드관리확인"));
+	}
+
+	/**
+	 * 검증표: <b>토큰 없음 → 401 {@code A001}</b>, 그리고 <b>{@code GET /api/v1/members/{accountId}}
+	 * 는 그대로 무인증으로 응답한다</b>. 둘을 한 테스트에서 본다 — 두 경로는 세그먼트 수로 갈리는
+	 * 다른 규칙이고 (sp-docs/api-contract.md §3.2), 일괄 조회를 인증 경로로 선언한 것이 세그먼트가
+	 * 하나 더 있는 공개 조회를 막지 않아야 한다.
+	 */
+	@Test
+	@DisplayName("토큰 없는 일괄 조회는 401 A001 이고 같은 id 의 공개 조회는 무인증 200 이다")
+	void 토큰_없는_일괄_조회와_공개_조회() throws Exception {
+		등록한다(311L, "무인증확인");
+
+		this.mockMvc.perform(get(PATH + "?accountIds=311"))
+				.andExpect(status().isUnauthorized())
+				.andExpect(jsonPath("$.success").value(false))
+				.andExpect(jsonPath("$.data").doesNotExist())
+				.andExpect(jsonPath("$.error.code").value("A001"));
+
+		this.mockMvc.perform(get(PATH + "/311"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.data.accountId").value(311))
+				.andExpect(jsonPath("$.data.nickname").value("무인증확인"));
+	}
+
+	private void 등록한다(long accountId, String nickname) throws Exception {
+		this.mockMvc.perform(등록(accountId, "{\"nickname\": \"" + nickname + "\"}"))
+				.andExpect(status().isCreated());
+	}
+
+	/** {@link #NON_SEED_CALLER_ID} 의 토큰으로 보낸다. {@code query} 가 비면 쿼리 문자열 없이 보낸다. */
+	private static MockHttpServletRequestBuilder 일괄_조회(String role, String query) {
+		String 경로 = query.isEmpty() ? PATH : PATH + "?" + query;
+		return get(경로).header(HttpHeaders.AUTHORIZATION,
+				"Bearer " + TestTokenFactory.accessToken(NON_SEED_CALLER_ID, role));
+	}
+
+	/** 공개 조회({@code GET /{accountId}}) 응답의 {@code data}. */
+	private Map<String, Object> 공개_조회_data(long accountId) throws Exception {
+		String 본문 = this.mockMvc.perform(get(PATH + "/" + accountId))
+				.andExpect(status().isOk())
+				.andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+		return JsonPath.read(본문, "$.data");
+	}
+
+	/** {@code first} 부터 연속한 id {@code count} 개를 쉼표로 잇는다. 0개면 빈 문자열이다. */
+	private static String 연속_id(long first, int count) {
+		return LongStream.range(first, first + count)
+				.mapToObj(String::valueOf)
+				.collect(Collectors.joining(","));
 	}
 
 	/** 실제 탈퇴 경로는 M-09 다. 지금은 엔티티 메서드로 같은 상태를 만든다. */

@@ -7,7 +7,9 @@ import java.time.LocalDateTime;
  * 공개 프로필 응답. 정본: sp-docs/api-contract.md §3.1 —
  * {@code {accountId, nickname, createdAt, deleted}}.
  *
- * <p>{@code GET /api/v1/members/{accountId}} 가 쓴다. <b>{@link MemberResponse} 를 늘리지 않고
+ * <p>{@code GET /api/v1/members/{accountId}} 가 쓴다. 프로필 일괄 조회(ADMIN)의 원소도 이
+ * 타입이다 — §3.2 가 원소를 이 조회와 같은 모양으로 정했다 ({@link MemberProfilesResponse}).
+ * <b>{@link MemberResponse} 를 늘리지 않고
  * 따로 둔다</b> — 그쪽은 {@code POST /api/v1/members}·{@code GET /me}·{@code PATCH /me} 가 쓰는
  * {@code {accountId, nickname}} 으로 고정됐고 (§3.1), 두 조회가 다른 모양인 것이 계약이다.
  *

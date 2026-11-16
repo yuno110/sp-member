@@ -53,6 +53,20 @@ public class ClaimContractValidator implements OAuth2TokenValidator<Jwt> {
 	public static final String ISSUER = "auth-service";
 
 	/**
+	 * sp-docs/api-contract.md §6 이 고정한 {@code role} 의 허용값 중 관리자다. 프로필 일괄 조회의
+	 * ADMIN 판정({@code MemberService})이 {@code role} 을 이 상수와 비교한다.
+	 *
+	 * <p><b>{@code role} 의 열거 값은 운영 코드에서 이 클래스의 상수로만 쓴다</b> — {@link #CONTRACT_ROLES}
+	 * 도 이 상수로 이룬다. 값을 읽는 자리마다 리터럴을 두면 열거 검사와 ADMIN 판정이 서로 다른 출처를
+	 * 보게 된다. 「열거 값의 출처를 하나 만들고 그 하나만 쓴다」 가 sp-docs/plan/phase1.md 의 M-12
+	 * 완료 기준이다.
+	 */
+	public static final String ADMIN = "ADMIN";
+
+	/** 같은 열거 값 중 일반 사용자다. {@link #CONTRACT_ROLES} 를 이룬다. */
+	private static final String USER = "USER";
+
+	/**
 	 * sp-docs/api-contract.md §6 이 고정한 {@code role} 의 허용값. 이 집합 밖의 값은 서명이
 	 * 유효해도 <b>계약 위반 토큰</b>이다 — §6 이 소비자에게 값 검증을 요구한다.
 	 *
@@ -60,7 +74,7 @@ public class ClaimContractValidator implements OAuth2TokenValidator<Jwt> {
 	 * 옮기고(sp-docs/conventions.md §1.2 의 패키지 구조에 권한 타입이 없다), 타입 전환은 이
 	 * 항목의 범위가 아니다 (sp-docs/plan/phase1.md §5 M-12).
 	 */
-	public static final Set<String> CONTRACT_ROLES = Set.of("USER", "ADMIN");
+	public static final Set<String> CONTRACT_ROLES = Set.of(USER, ADMIN);
 
 	@Override
 	public OAuth2TokenValidatorResult validate(Jwt jwt) {

@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.example.member.global.error.BusinessException;
 import com.example.member.global.error.ErrorCode;
+import com.example.member.global.security.LoginMember;
+import com.example.member.member.dto.MemberProfilesResponse;
 import com.example.member.member.dto.MemberResponse;
 import com.example.member.member.dto.NicknameUpdateRequest;
 import com.example.member.member.dto.ProfileCreateRequest;
@@ -16,19 +18,26 @@ import static org.mockito.BDDMockito.willReturn;
 
 import com.example.member.member.entity.Member;
 import com.example.member.member.repository.MemberRepository;
+import com.example.member.support.RecordingStatementInspector;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
+import java.util.List;
 import javax.sql.DataSource;
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 /**
@@ -43,7 +52,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
  * 의미가 있다.
  *
  * <p>픽스처의 {@code accountId} 는 M-05 가 201~, <b>M-08 이 241~249 · 263~267 · 271~272</b>
- * 쓰고 <b>M-09 가 273~275</b> 를
+ * 쓰고 <b>M-09 가 273~275</b>, M-16 이 321~329 를
  * 쓰고, 닉네임은
  * {@code 관리자} 가 아닌 값을 쓴다. ADMIN seed 가 {@code (1, '관리자')} 를 넣으므로 겹치면 UNIQUE
  * 위반으로 깨진다 (sp-docs/requirements/member.md §10.1). M-03 의 픽스처(101~)·M-05 의
@@ -55,6 +64,27 @@ class MemberServiceTest {
 
 	/** {@code V2__seed_admin_profile.sql} 의 프로필 (sp-docs/requirements/member.md §10.1). */
 	private static final Long SEED_ACCOUNT_ID = 1L;
+
+	/**
+	 * 프로필 일괄 조회의 호출자로 쓰는 <b>seed 가 아닌 계정</b>이다. 이 계정의 프로필은 등록하지 않는다.
+	 *
+	 * <p><b>ADMIN 판정은 이 계정과 seed 계정에 각각 {@code ADMIN}·{@code USER} 를 실은 네 조합으로
+	 * 본다</b> — 두 계정 모두 {@code ADMIN} 이면 허용이고 {@code USER} 면 {@code A004} 다. 같은
+	 * {@code role} 인데 계정에 따라 결과가 갈리는 구현은 네 조합 중 하나에서 빨개진다. 조합마다
+	 * 빨개지는 모양은 이렇다(M-16 이 변이로 쟀다).
+	 *
+	 * <ul>
+	 * <li>이 계정의 {@code ADMIN}({@link #ADMIN_일괄_조회}) — 「{@code role} 을 보지 않고 seed 만
+	 * 허용」, 「{@code ADMIN} 이고 seed 일 때만 허용」
+	 * <li>seed 계정의 {@code USER}({@link #ADMIN_이_아니면_A004}) — 「{@code role} 을 보지 않고 seed 만
+	 * 허용」, 「{@code ADMIN} 이거나 seed 면 허용」
+	 * <li>이 계정의 {@code USER}({@link #seed_가_아닌_계정의_USER_도_A004}) — 「{@code role} 을 보지 않고
+	 * seed 만 거부」
+	 * <li>seed 계정의 {@code ADMIN}({@link #seed_계정의_ADMIN_도_허용}) — 「{@code role} 을 보지 않고
+	 * seed 만 거부」, 「{@code ADMIN} 이고 seed 가 아닐 때만 허용」
+	 * </ul>
+	 */
+	private static final long NON_SEED_CALLER_ID = 328L;
 
 	@Autowired
 	private MemberService memberService;
@@ -912,6 +942,153 @@ class MemberServiceTest {
 		assertThat(this.memberRepository.findByAccountId(275L))
 				.as("없는 계정에 탈퇴 행을 만들지 않는다")
 				.isEmpty();
+	}
+
+	// --- 프로필 일괄 조회 (ADMIN, M-16, sp-docs/api-contract.md §3.2) ---
+
+	/**
+	 * 완료 기준: <b>원소가 §3.1 의 공개 조회와 같은 모양이다 — 마스킹 규칙은 한 곳이다.</b> 원소를
+	 * 같은 id 의 {@link MemberService#getProfile} 결과와 레코드째 비교한다. 활성·탈퇴 프로필을 둘
+	 * 다 넣는다.
+	 *
+	 * <p>같은 호출에서 순서({@code accountId} 오름차순)·없는 id 제외·같은 id 한 번을 함께 본다
+	 * (§3.2). 행을 {@code accountId} 오름차순이 아닌 순서로 넣는다. 조회에서 {@code ORDER BY} 가
+	 * 빠진 것은 이 단언이 H2 에서 잡지 못한다 — {@link 일괄_조회의_정렬} 이 나간 SQL 을 보고 잡는다.
+	 *
+	 * <p>호출자는 seed 가 아닌 계정의 {@code ADMIN} 이다 — ADMIN 판정을 보는 네 조합 중 하나다
+	 * ({@link #NON_SEED_CALLER_ID}).
+	 */
+	@Test
+	@DisplayName("ADMIN 이면 원소가 같은 id 의 공개 조회와 같고 accountId 오름차순이며 없는 id 는 빠진다")
+	void ADMIN_일괄_조회() {
+		this.memberService.register(323L, request("서비스셋째"));
+		this.memberService.register(321L, request("서비스첫째"));
+		this.memberService.register(322L, request("서비스둘째"));
+		this.memberService.withdraw(322L);
+
+		MemberProfilesResponse result = this.memberService.getProfiles(
+				new LoginMember(NON_SEED_CALLER_ID, "ADMIN"), List.of(323L, 329L, 321L, 322L, 321L));
+
+		assertThat(result.members())
+				.as("공개 조회와 같은 원소가 accountId 오름차순으로 한 번씩 실리고 329 는 없다 (§3.2)")
+				.containsExactly(
+						this.memberService.getProfile(321L),
+						this.memberService.getProfile(322L),
+						this.memberService.getProfile(323L));
+		assertThat(result.members().get(1).nickname())
+				.as("탈퇴한 프로필은 응답 시 \"탈퇴한 회원\" 이다 (sp-docs/domain-model.md §3.1)")
+				.isEqualTo("탈퇴한 회원");
+	}
+
+	/**
+	 * 완료 기준: <b>ADMIN 판정은 {@code LoginMember.role()} 이 {@code "ADMIN"} 과 같을 때만
+	 * 허용하는 모양이다. 아니면 403 {@code A004}</b> (sp-docs/security.md §5.1).
+	 *
+	 * <p>{@code USER} 만 보면 거부 목록 모양({@code "USER"} 면 거부)도 통과한다. 그래서 대소문자나
+	 * 공백이 다른 값, 열거 밖 값, 빈 값, {@code null} 을 함께 본다 — {@code "ADMIN"} 과 같지 않으면
+	 * 전부 거부여야 한다. HTTP 로는 열거 밖 값이 인증 단계에서 401 {@code A002} 로 끊겨 이
+	 * 메서드에 오지 않으므로 서비스를 직접 부른다.
+	 *
+	 * <p><b>호출자는 seed 계정이다</b> — {@code role} 이 {@code USER} 인 경우가 ADMIN 판정을 보는 네
+	 * 조합 중 하나다 ({@link #NON_SEED_CALLER_ID}).
+	 */
+	@ParameterizedTest(name = "role=\"{0}\"")
+	@NullSource
+	@ValueSource(strings = {"USER", "admin", "ADMIN ", "BOGUS", ""})
+	@DisplayName("role 이 ADMIN 과 같지 않으면 seed 계정이어도 일괄 조회는 A004 다")
+	void ADMIN_이_아니면_A004(String role) {
+		LoginMember seedCaller = new LoginMember(SEED_ACCOUNT_ID, role);
+
+		assertThatThrownBy(() -> this.memberService.getProfiles(seedCaller, List.of(321L)))
+				.isInstanceOf(BusinessException.class)
+				.extracting(e -> ((BusinessException) e).getErrorCode())
+				.isEqualTo(ErrorCode.ACCESS_DENIED);
+	}
+
+	/**
+	 * seed 가 아닌 계정의 {@code USER} 도 {@code A004} 다 — ADMIN 판정을 보는 네 조합 중 하나다
+	 * ({@link #NON_SEED_CALLER_ID}). {@code role} 을 보지 않고 seed 계정만 거부하는 구현이 여기서
+	 * 빨개진다.
+	 */
+	@Test
+	@DisplayName("seed 가 아닌 계정의 USER 도 일괄 조회는 A004 다")
+	void seed_가_아닌_계정의_USER_도_A004() {
+		LoginMember nonSeedUser = new LoginMember(NON_SEED_CALLER_ID, "USER");
+
+		assertThatThrownBy(() -> this.memberService.getProfiles(nonSeedUser, List.of(321L)))
+				.isInstanceOf(BusinessException.class)
+				.extracting(e -> ((BusinessException) e).getErrorCode())
+				.isEqualTo(ErrorCode.ACCESS_DENIED);
+	}
+
+	/**
+	 * seed 계정의 {@code ADMIN} 도 허용된다 — ADMIN 판정을 보는 네 조합 중 하나다
+	 * ({@link #NON_SEED_CALLER_ID}). 계정이 seed 면 거부하는 구현이 여기서 빨개진다. 원소는 같은 id 의
+	 * 공개 조회와 같다.
+	 */
+	@Test
+	@DisplayName("seed 계정의 ADMIN 도 일괄 조회가 허용된다")
+	void seed_계정의_ADMIN_도_허용() {
+		this.memberService.register(321L, request("서비스시드"));
+
+		MemberProfilesResponse result = this.memberService.getProfiles(
+				new LoginMember(SEED_ACCOUNT_ID, "ADMIN"), List.of(321L));
+
+		assertThat(result.members())
+				.as("seed 계정이어도 ADMIN 이면 허용되어 원소가 실린다")
+				.containsExactly(this.memberService.getProfile(321L));
+	}
+
+	/**
+	 * 완료 기준: <b>순서는 {@code accountId} 오름차순이다</b> (sp-docs/api-contract.md §3.2). 이 테스트는
+	 * 그 순서를 내는 <b>수단</b>을 본다. 결과의 순서는 정본이 정하고, 그 순서를 조회의
+	 * {@code ORDER BY} 로 내는 것({@link MemberRepository#findByAccountIdInOrderByAccountIdAsc})과 행을
+	 * SELECT 하나로 읽는 것은 이 구현이 고른 수단이다.
+	 *
+	 * <p><b>결과의 순서를 보는 단언으로는 {@code ORDER BY} 가 빠진 것을 잡지 못한다.</b> H2 가
+	 * {@code ORDER BY} 없는 {@code account_id IN} 조회에도 행을 {@code accountId} 오름차순으로
+	 * 돌려줬다 — 서비스가 정렬 없는 {@link MemberRepository#findByAccountIdIn} 을 부르는 변이와,
+	 * {@code findByAccountIdInOrderByAccountIdAsc} 에 {@code ORDER BY} 없는 {@code @Query} 를 붙인
+	 * 변이에서 순서를 보는 단언이 모두 통과했다(M-16 이 변이로 쟀다). 운영 DB(MySQL)가 그 조회에
+	 * 돌려주는 순서는 실행 계획에 달렸다.
+	 *
+	 * <p>그래서 {@link MemberService#getProfiles} 가 낸 SQL 을 Hibernate 의 {@code StatementInspector}
+	 * 로 받아({@link RecordingStatementInspector}) {@code ORDER BY} 를 본다 — 위 두 변이가 여기서
+	 * 빨개진다. 못박는 것은 결과가 아니라 수단이다: 메모리에서 정렬하는 구현도 여기서 빨개진다.
+	 *
+	 * <p><b>SELECT 를 하나로 요구하는 것은 그 SELECT 의 {@code ORDER BY} 가 응답의 순서라고 말하기
+	 * 위해서다.</b> 응답의 행은 {@code getProfiles} 가 그 호출에서 낸 SELECT 로 읽힌다. 하나뿐이면 그
+	 * SELECT 가 행을 읽은 조회이고, 둘 이상이면 어느 쪽이 행을 읽었는지 이 단언이 알 수 없다 — 정렬된
+	 * 조회와 정렬 없는 조회를 함께 내고 응답을 뒤의 것으로 만드는 구현이 「어느 하나에
+	 * {@code ORDER BY} 가 있다」 는 통과한다. 그래서 SQL 이 늘어 이 단언이 깨지면 행을 읽는 SELECT 를
+	 * 골라 그것을 보게 고치고, 단언을 그렇게 넓히지 않는다.
+	 *
+	 * <p>기록기를 다는 설정({@code @TestPropertySource})이 바깥 클래스와 달라 컨텍스트가 따로 뜬다.
+	 */
+	@Nested
+	@TestPropertySource(properties = "spring.jpa.properties.hibernate.session_factory.statement_inspector="
+			+ "com.example.member.support.RecordingStatementInspector")
+	@DisplayName("프로필 일괄 조회의 정렬 (나간 SQL 을 본다)")
+	class 일괄_조회의_정렬 {
+
+		/** 기록기를 단 컨텍스트의 서비스다. 바깥 클래스의 것과 다른 인스턴스다. */
+		@Autowired
+		private MemberService memberService;
+
+		@Test
+		@DisplayName("일괄 조회가 낸 SELECT 는 하나이고 account_id 로 정렬한다")
+		void 조회가_accountId_로_정렬한다() {
+			RecordingStatementInspector.clear();
+
+			this.memberService.getProfiles(
+					new LoginMember(NON_SEED_CALLER_ID, "ADMIN"), List.of(323L, 321L, 322L));
+
+			assertThat(RecordingStatementInspector.statements())
+					.as("getProfiles 가 낸 SQL — 행을 읽는 SELECT 하나가 account_id 로 정렬한다 (이 구현이 고른 수단이다)")
+					.singleElement(InstanceOfAssertFactories.STRING)
+					.containsPattern("(?i)order by \\w+\\.account_id");
+		}
+
 	}
 
 	/** 실제 탈퇴 경로는 M-09 다. 지금은 엔티티 메서드로 같은 상태를 만든다. */

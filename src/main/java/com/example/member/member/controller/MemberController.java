@@ -5,13 +5,17 @@ import com.example.member.global.security.CurrentMember;
 import com.example.member.global.security.LoginMember;
 import com.example.member.member.dto.CheckResponse;
 import com.example.member.member.dto.MemberProfileResponse;
+import com.example.member.member.dto.MemberProfilesResponse;
 import com.example.member.member.dto.MemberResponse;
 import com.example.member.member.dto.NicknameUpdateRequest;
 import com.example.member.member.dto.ProfileCreateRequest;
 import com.example.member.member.dto.ProfileRegistration;
 import com.example.member.member.service.MemberService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -29,7 +33,8 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * 프로필 API. 정본: sp-docs/api-contract.md §3.
  *
- * <p>M-05 가 만들고 M-08·M-09·M-10 이 확장한다 (sp-docs/plan/phase1.md §2.3).
+ * <p>M-05 가 만들고 M-08·M-09·M-10 이 확장한다 (sp-docs/plan/phase1.md §2.3). 2차의 M-16 이 프로필
+ * 일괄 조회(ADMIN)를 더했다 (sp-docs/plan/phase2-auth-member.md).
  *
  * <p>경로별 인가는 M-04 의 {@code SecurityConfig} 가 선반영했다 —
  * {@code POST /api/v1/members} 는 인증이고 {@code GET /members/check-nickname} 은 무인증이다
@@ -42,6 +47,16 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 @RequestMapping("/api/v1/members")
 public class MemberController {
+
+	/** sp-docs/api-contract.md §3.2 가 정한 {@code accountIds} 개수의 하한이다. */
+	private static final int MIN_ACCOUNT_IDS = 1;
+
+	/** 같은 절의 상한이다. 계정 목록(§2.5)의 최대 {@code size} 와 같은 값이라고 §3.2 가 적는다. */
+	private static final int MAX_ACCOUNT_IDS = 50;
+
+	private static final String ACCOUNT_IDS_SIZE_MESSAGE = "accountIds 는 {min}~{max}개여야 합니다.";
+
+	private static final String ACCOUNT_IDS_ELEMENT_MESSAGE = "accountIds 에 빈 값을 넣을 수 없습니다.";
 
 	private final MemberService memberService;
 
@@ -195,6 +210,53 @@ public class MemberController {
 	@GetMapping("/{accountId}")
 	public ApiResponse<MemberProfileResponse> getProfile(@PathVariable Long accountId) {
 		return ApiResponse.success(this.memberService.getProfile(accountId));
+	}
+
+	/**
+	 * MR-13 의 프로필 쪽 — 프로필 일괄 조회 (ADMIN). 200 과 {@code {members: [...]}}
+	 * (sp-docs/api-contract.md §3.2, sp-docs/requirements/member.md §13).
+	 *
+	 * <p><b>{@code accountIds} 는 쉼표 목록과 같은 이름의 반복을 둘 다 받는다</b> (§3.2) —
+	 * {@code accountIds=3,1} 도 {@code accountIds=3&accountIds=1} 도 같은 목록이 된다. 둘을 가르는
+	 * 코드를 두지 않는다: 값이 하나면 쉼표로 나눠 변환하고 여럿이면 하나씩 변환하는 것이
+	 * {@code List} 파라미터의 바인딩이다.
+	 *
+	 * <p><b>개수가 §3.2 의 범위 밖이면 400 {@code C001} 이고 {@code fieldErrors} 에
+	 * {@code accountIds} 가 담긴다</b> ({@code @Size}). <b>절삭하지 않는다</b> — 잘린
+	 * id 의 프로필이 조용히 빠지면 화면이 「프로필 없음」 과 구별하지 못한다. 세는 것은 보낸 값의
+	 * 수다(되풀이한 id 도 센다). 빈 값({@code accountIds=})은 원소가 0개라 같은 400 이다.
+	 *
+	 * <p>개수 말고도 다음 입력을 400 으로 거부한다. 거부하는 단계는 입력마다 다르고, 예외를 코드로
+	 * 바꾸는 것은 {@code GlobalExceptionHandler} 다 (sp-docs/conventions.md §6.1).
+	 *
+	 * <ul>
+	 * <li><b>누락</b> — {@code @RequestParam} 이 기본으로 필수라 바인딩 단계가 거부한다. 400
+	 * {@code C001} 이고 {@code fieldErrors} 는 빈 배열이다 (§3.2, §2.3)
+	 * <li><b>숫자가 아닌 값</b>({@code accountIds=abc}) — 바인딩 단계의 변환이 실패해 400
+	 * {@code C002} 다 (§3.2)
+	 * <li><b>빈 원소</b>({@code accountIds=1,,2}) — 변환이 빈 문자열을 {@code null} 로 바꾸고, 원소의
+	 * {@code @NotNull} 이 거부한다. 그 실패({@code HandlerMethodValidationException})가 400
+	 * {@code C001} 이 되고 (sp-docs/conventions.md §6.1), {@code fieldErrors} 에는 빈 원소마다
+	 * {@code accountIds} 1건이 담긴다({@code GlobalExceptionHandler}). 이 검사가 없으면 {@code null} 이
+	 * 조회의 {@code IN} 에 실려 아무 행에도 걸리지 않고 200 으로 조용히 빠진다
+	 * </ul>
+	 *
+	 * <p><b>ADMIN 판정은 {@link MemberService#getProfiles} 가 한다</b> — 아니면 403 {@code A004}
+	 * (§3.2, sp-docs/security.md §5.1). 위 검증은 인자를 만드는 단계라 그 판정보다 먼저다. 토큰
+	 * 없는 접근은 Security 필터 체인이 401 {@code A001} 로 끊는다 ({@code SecurityConfig} 가 이
+	 * 경로를 인증으로 선언했다).
+	 *
+	 * <p><b>내부 API({@code /internal/**})를 쓰지 않는다</b> — 그것은 서비스 간 호출 전용이고 API
+	 * 키로 보호된다. 사람의 요청은 JWT 로 판정한다 (§3.2).
+	 */
+	@GetMapping
+	public ApiResponse<MemberProfilesResponse> getProfiles(
+			@CurrentMember LoginMember loginMember,
+			@RequestParam
+			@Size(min = MIN_ACCOUNT_IDS, max = MAX_ACCOUNT_IDS, message = ACCOUNT_IDS_SIZE_MESSAGE)
+			List<@NotNull(message = ACCOUNT_IDS_ELEMENT_MESSAGE) Long> accountIds) {
+
+		return ApiResponse.success(this.memberService.getProfiles(loginMember, accountIds));
 	}
 
 }

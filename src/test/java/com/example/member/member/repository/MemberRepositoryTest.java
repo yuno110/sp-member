@@ -26,6 +26,8 @@ import org.springframework.test.context.ActiveProfiles;
  * 대한 것(실행 중 DataSource URL, 저장된 테이블명, 스키마 출처)은
  * {@link com.example.member.TestDatabaseEnvironmentTest} 가 본다.
  *
+ * <p>2차의 M-16 이 프로필 일괄 조회(ADMIN)의 조회를 더했다 (sp-docs/plan/phase2-auth-member.md).
+ *
  * <p>{@code replace = NONE} 이 필수다. {@code @DataJpaTest} 의 기본값은 DataSource 를
  * {@code jdbc:h2:mem:<uuid>} 로 교체해 {@code MODE=MySQL} 을 날려버린다
  * (sp-docs/tech-stack.md §5.2).
@@ -205,6 +207,40 @@ class MemberRepositoryTest {
 
 		assertThat(found.isDeleted()).isTrue();
 		assertThat(found.getNickname()).isNull();
+	}
+
+	/**
+	 * 프로필 일괄 조회(ADMIN)의 조회다 (M-16, sp-docs/api-contract.md §3.2). <b>{@code accountId}
+	 * 오름차순이고, 없는 id 는 빠지고, 같은 id 는 한 번이며, 탈퇴한 프로필도 나온다.</b>
+	 *
+	 * <p>행을 {@code accountId} 오름차순이 아닌 순서로 넣는다 — 기본 키(삽입 순서)로 정렬하는 조회가
+	 * 우연히 통과하지 않게 한다.
+	 *
+	 * <p><b>{@code ORDER BY} 가 빠진 것은 이 단언이 잡지 못한다.</b> 이 조회에서 {@code ORDER BY} 를
+	 * 뺀 변이가 이 저장소의 H2 에서 통과했다(M-16 이 쟀다) — H2 가 그 조회에도 행을 넣은 순서가
+	 * 아니라 {@code accountId} 순서로 돌려줬다. 그것은 {@code MemberServiceTest.일괄_조회의_정렬} 이
+	 * 일괄 조회가 낸 SQL 을 보고 잡는다. 순서를 보장하는 것은 조회의 {@code ORDER BY} 이고, 그것이
+	 * 없을 때 운영 DB(MySQL)가 돌려주는 순서는 실행 계획에 달렸다.
+	 */
+	@Test
+	@DisplayName("accountId 목록으로 읽으면 오름차순이고 없는 id 는 빠지며 같은 id 는 한 번이고 탈퇴도 나온다")
+	void accountId_목록으로_오름차순_조회() {
+		memberRepository.saveAndFlush(member(122L, "목록둘째"));
+		memberRepository.saveAndFlush(member(123L, "목록셋째"));
+		memberRepository.saveAndFlush(member(121L, "목록첫째"));
+		memberRepository.findByAccountId(122L).orElseThrow().withdraw();
+		em.flush();
+		em.clear();
+
+		List<Member> found = memberRepository.findByAccountIdInOrderByAccountIdAsc(
+				List.of(123L, 129L, 121L, 122L, 123L));
+
+		assertThat(found).extracting(Member::getAccountId)
+				.as("오름차순이고 129 는 없으며 123 은 한 번이다 (§3.2)")
+				.containsExactly(121L, 122L, 123L);
+		assertThat(found.get(1).isDeleted())
+				.as("탈퇴한 프로필도 나온다 (§3.2) — 조회가 deleted 로 거르지 않는다")
+				.isTrue();
 	}
 
 	@Test

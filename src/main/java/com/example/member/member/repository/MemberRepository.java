@@ -34,6 +34,26 @@ public interface MemberRepository extends JpaRepository<Member, Long> {
 	List<Member> findByAccountIdIn(Collection<Long> accountIds);
 
 	/**
+	 * 프로필 일괄 조회(ADMIN)가 쓴다 ({@code GET /api/v1/members?accountIds=},
+	 * sp-docs/api-contract.md §3.2).
+	 *
+	 * <p><b>순서는 {@code accountId} 오름차순이다</b> (§3.2). 정렬을 이 조회의 {@code ORDER BY}
+	 * 가 갖는다. {@link #findByAccountIdIn} 에는 {@code ORDER BY} 가 없고 그것을 쓰는 내부
+	 * API 는 순서를 요구하지 않는다 (§5 「요청 순서와 응답 순서를 맞추지 않는다」) — 그래서 그
+	 * 조회에 정렬을 더하지 않고 이 조회를 따로 둔다.
+	 *
+	 * <p><b>없는 {@code accountId} 는 결과에 없고, 같은 {@code accountId} 를 여러 번 넘겨도 행은 한
+	 * 번 나온다</b> — {@code IN} 조회가 행마다 한 번 걸리기 때문이다. §3.2 의 「없는 {@code accountId}
+	 * 는 결과에서 뺀다」 와 「같은 id 를 여러 번 주면 한 번만 싣는다」 가 그 결과이므로 그것을 위한
+	 * 분기를 따로 두지 않는다.
+	 *
+	 * <p><b>{@code deleted} 를 조건에 넣지 않는다.</b> 탈퇴한 프로필도 {@code deleted: true} 와
+	 * {@code "탈퇴한 회원"} 으로 싣는다 (§3.2) — 조건에 넣으면 화면이 탈퇴를 「프로필 없음」 과
+	 * 구별하지 못한다.
+	 */
+	List<Member> findByAccountIdInOrderByAccountIdAsc(Collection<Long> accountIds);
+
+	/**
 	 * 닉네임 선점 여부. {@code GET /members/check-nickname} 과 프로필 등록의 {@code M003}
 	 * 판정이 쓴다 (sp-docs/api-contract.md §2.3 §3).
 	 *

@@ -20,15 +20,15 @@ package com.example.member.global.security;
  * {@code A002} 로 거부한다. 발급 측 계약이기만 한 것이 아니므로, 그 검사를 지우면 계약 밖
  * 토큰이 통과한다 (sp-docs/plan/phase1.md §5 M-12).
  *
- * <p><b>이 값으로 권한을 판정하는 자리가 member 에 없다.</b> {@link RoleClaimConverter} 가
- * {@code ROLE_} 권한을 만들어 {@code Authentication} 에 싣지만, 그 권한을 읽는 인가 규칙
- * ({@code hasRole}·{@code @PreAuthorize})이 없고 운영 코드가 {@link #role()} 을 읽지도
- * 않는다. member 의 업무 경로에는 역할로 갈리는 동작이 없고 — ADMIN 으로 갈리는 것은 board 가
- * 갖는다 (sp-docs/security.md §5.2) — 이 서비스가 쓰는 것은 경로별 인증 여부와, 토큰의
- * {@code accountId} 를 자기 자원의 키로 쓰는 것이다 (sp-docs/security.md §5.1 의 첫 행,
- * §4 의 {@code account_id = Claim.sub}). <b>소유자 비교는 member 에 없다</b> — §5.1 의
- * "소유자 검증" 행이 가리키는 것은 board 의 {@code PostService.validateOwner} 다. 그래서
- * {@code role} 이 실제로 쓰이는 자리는 위의 계약 검증이다.
+ * <p><b>ADMIN 판정은 이 값을 문자열로 비교해서 한다</b> — 프로필 일괄 조회(ADMIN)에서
+ * {@code MemberService} 가 {@link #role()} 이 {@link ClaimContractValidator#ADMIN} 과 같을 때만
+ * 허용한다 (sp-docs/security.md §5.1, sp-docs/api-contract.md §3.2). {@link RoleClaimConverter} 가
+ * {@code ROLE_} 권한을 만들어 {@code Authentication} 에 싣지만 <b>{@code GrantedAuthority} 로
+ * 판정하지 않는다</b> (sp-docs/security.md §5.1). 경로별 인증 여부는 {@code SecurityFilterChain} 이
+ * 정하고 (sp-docs/security.md §5.1 의 "인증 필요 여부(경로별)" 행), 자기 자원은 토큰의
+ * {@code accountId} 를 키로 찾는다 (sp-docs/security.md §4 의 {@code account_id = Claim.sub}) —
+ * 그래서 소유자를 따로 비교하지 않는다. sp-docs/security.md §5.1 의 "소유자 검증" 행이 가리키는
+ * 것은 board 의 {@code PostService.validateOwner} 다.
  *
  * @param accountId {@code sub}. 전역 식별자(= {@code account.id})
  * @param role {@code role} claim

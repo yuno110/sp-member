@@ -2,8 +2,11 @@ package com.example.member.member.service;
 
 import com.example.member.global.error.BusinessException;
 import com.example.member.global.error.ErrorCode;
+import com.example.member.global.security.ClaimContractValidator;
+import com.example.member.global.security.LoginMember;
 import com.example.member.member.dto.CheckResponse;
 import com.example.member.member.dto.MemberProfileResponse;
+import com.example.member.member.dto.MemberProfilesResponse;
 import com.example.member.member.dto.MemberResponse;
 import com.example.member.member.dto.NicknameUpdateRequest;
 import com.example.member.member.dto.ProfileCreateRequest;
@@ -11,6 +14,7 @@ import com.example.member.member.dto.ProfileRegistration;
 import com.example.member.member.entity.Member;
 import com.example.member.member.repository.MemberRepository;
 import com.example.member.member.support.MemberReader;
+import java.util.List;
 import java.util.Optional;
 import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -22,10 +26,11 @@ import org.springframework.transaction.interceptor.TransactionAspectSupport;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * 프로필 유스케이스. 정본: sp-docs/requirements/member.md §1 §2 §3 §4,
- * sp-docs/api-contract.md §2.3 §3 §9.1.
+ * 프로필 유스케이스. 정본: sp-docs/requirements/member.md §1 §2 §3 §4 §13,
+ * sp-docs/api-contract.md §2.3 §3 §3.2 §9.1.
  *
- * <p>M-05 가 만들고 M-08·M-09·M-10 이 확장한다 (sp-docs/plan/phase1.md §2.3).
+ * <p>M-05 가 만들고 M-08·M-09·M-10 이 확장한다 (sp-docs/plan/phase1.md §2.3). 2차의 M-16 이 프로필
+ * 일괄 조회(ADMIN)를 더했다 (sp-docs/plan/phase2-auth-member.md).
  *
  * <p><b>이메일·비밀번호를 다루지 않는다.</b> 프로필은 닉네임만 갖는다
  * (sp-docs/adr/0012-auth-as-separate-service.md).
@@ -260,6 +265,58 @@ public class MemberService {
 	@Transactional(readOnly = true)
 	public MemberProfileResponse getProfile(Long accountId) {
 		return MemberProfileResponse.from(this.memberReader.getByAccountId(accountId));
+	}
+
+	/**
+	 * MR-13 의 프로필 쪽 — 프로필 일괄 조회 (ADMIN) (sp-docs/requirements/member.md §13,
+	 * sp-docs/api-contract.md §3.2). 화면이 auth 의 계정 목록 한 페이지에서 받은 id 들로 부르고,
+	 * 둘을 {@code accountId} 로 합치는 것은 화면이다 — <b>member 가 auth 를 부르지 않는다</b>
+	 * (§13, sp-docs/adr/0012 §1).
+	 *
+	 * <p><b>ADMIN 판정을 여기서 한다</b> — Claim 의 {@code role} 값을 {@link LoginMember#role()} 로
+	 * 읽는다. {@code GrantedAuthority} 로 판정하지 않는다 (sp-docs/security.md §5.1).
+	 * {@code SecurityConfig} 는 이 경로를 인증 경로로 선언한다 (sp-docs/api-contract.md §3.2). 판정의
+	 * 모양은 {@link #requireAdmin} 에 있다.
+	 *
+	 * <p><b>원소는 공개 조회({@link #getProfile})와 같은 모양이다</b> (§3.2) — 타입도 같은
+	 * {@link MemberProfileResponse} 를 쓴다. 탈퇴한 프로필은 {@code "탈퇴한 회원"}·{@code deleted: true}
+	 * 로 싣는다 — 그 변환은 공개 조회와 같은 {@link Member#displayNickname()} 이 한다. 없는
+	 * {@code accountId} 를 빼고, 같은 id 를 한 번만 싣고, {@code accountId} 오름차순으로 두는 것은
+	 * 조회가 한다 ({@link MemberRepository#findByAccountIdInOrderByAccountIdAsc}). <b>없는 id 를
+	 * {@code M001} 로 바꾸지 않는다</b> — 프로필이 없는 계정(가입 3단계 미완료)이 정상이라 화면이
+	 * 「프로필 없음」 으로 그린다 (§3.2). 그래서 {@link MemberReader} 를 쓰지 않는다.
+	 *
+	 * <p><b>ADMIN 으로 묶는 것은 개인정보 보호가 아니다.</b> 같은 값을 {@code GET /{accountId}}
+	 * 가 무인증으로 한 건씩 준다 — 일괄 조회를 공개 경로로 열지 않는 것이다 (§13).
+	 *
+	 * @param loginMember 검증된 토큰의 주체. {@code role} 만 읽는다
+	 * @param accountIds 개수·누락·형식은 컨트롤러의 바인딩과 검증이 이미 걸렀다
+	 *         ({@code MemberController#getProfiles})
+	 */
+	@Transactional(readOnly = true)
+	public MemberProfilesResponse getProfiles(LoginMember loginMember, List<Long> accountIds) {
+		requireAdmin(loginMember);
+		return new MemberProfilesResponse(
+				this.memberRepository.findByAccountIdInOrderByAccountIdAsc(accountIds).stream()
+						.map(MemberProfileResponse::from)
+						.toList());
+	}
+
+	/**
+	 * <b>{@code role} 이 {@code ADMIN} 과 같을 때만 허용하고 나머지는 전부 403 {@code A004}
+	 * 다</b> (sp-docs/security.md §5.1, sp-docs/api-contract.md §3.2). 비교하는 값은
+	 * {@link ClaimContractValidator#ADMIN} 이다 — 열거 검사와 같은 출처를 읽는다.
+	 *
+	 * <p>열거 밖 {@code role} 은 이미 인증 단계에서 401 {@code A002} 로 거부된다
+	 * ({@code ClaimContractValidator}). 그래도 거부 목록의 모양({@code USER} 면 거부)으로 쓰지
+	 * 않는다 — 그 모양이면 인증 단계의 값 검사가 빠졌을 때 모르는 값이 허용 분기로 간다. 이
+	 * 모양에서는 그 값도 거부 분기로 떨어진다 (sp-docs/security.md §5.1 이 새 판정에 이 모양을
+	 * 요구한다).
+	 */
+	private static void requireAdmin(LoginMember loginMember) {
+		if (!ClaimContractValidator.ADMIN.equals(loginMember.role())) {
+			throw new BusinessException(ErrorCode.ACCESS_DENIED);
+		}
 	}
 
 	/**
