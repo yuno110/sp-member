@@ -117,6 +117,13 @@ public class MemberService {
 	 * (sp-docs/api-contract.md §2.3). <b>최종 판정은 UNIQUE 제약이고</b> 그것을 밟았을 때의
 	 * 결론은 {@link #resolveIntegrityViolation} 에 있다.
 	 *
+	 * <p><b>그 충돌에 Hibernate 가 남기는 ERROR 줄은 sp-docs/conventions.md §8.1 이 버린다.</b>
+	 * {@code uk_member_nickname}·{@code uk_member_account_id} 의 위반마다 {@code SqlExceptionHelper} 가
+	 * WARN 과, 중복 값(닉네임·계정 id)을 실은 ERROR 를 남긴다(H2 에서 보았다 — MySQL 은 §8.1 의
+	 * 추정이다). {@code logback-spring.xml} 의 필터가 그 ERROR 만 버리고, 충돌의 흔적은 WARN 이
+	 * 남긴다. <b>그래서 잡는 코드는 로그를 더하지 않는다</b> (§8.1 의 「버린다」 행) — 잡지 않고
+	 * 다시 던진 위반은 마지막 그물이 ERROR 로 남긴다 (sp-docs/conventions.md §6.1).
+	 *
 	 * @param accountId 검증된 JWT 의 {@code sub}. 요청 본문의 식별자를 쓰지 않는다
 	 *         (sp-docs/security.md §4, sp-docs/api-contract.md §3)
 	 */
@@ -341,6 +348,13 @@ public class MemberService {
 	 * sp-docs/api-contract.md §2.3 이 생성 경로에 정한 것과 같다). <b>500 으로 내보내지 않는다</b> —
 	 * 클라이언트가 잘못한 것이 없는데 마지막 그물이 {@code log.error} 를 남기면 흔한 경합이 경보가
 	 * 된다 (sp-docs/conventions.md §6.1 의 로그 수준 분리).
+	 *
+	 * <p><b>그 충돌에 Hibernate 가 남기는 ERROR 줄은 sp-docs/conventions.md §8.1 이 버린다.</b> 위의
+	 * 이유는 핸들러가 남기는 줄의 것이고, 그와 따로 {@code SqlExceptionHelper} 가 위반마다 WARN 과
+	 * 닉네임을 실은 ERROR 를 남긴다(H2 에서 보았다 — MySQL 은 §8.1 의 추정이다). {@code logback-spring.xml} 의
+	 * 필터가 그 ERROR 만 버리고, 충돌의
+	 * 흔적은 WARN 이 남긴다. 잡는 코드는 로그를 더하지 않는다 (§8.1 의 「버린다」 행) — 프로필 등록과
+	 * 같다.
 	 *
 	 * <p><b>이 경로의 결론은 {@link #resolveIntegrityViolation} 보다 단순하다.</b> 여기에는
 	 * {@code uk_member_account_id} 경합이 없다 — 자기 행을 {@code accountId} 로 집어 UPDATE 하므로

@@ -56,7 +56,8 @@
 
 - [x] M-14 에러 코드·예외 매핑·경로 선언 · 상태 done · 커밋 7f0b309
 - [x] M-15 요청 수 제한 — member · 상태 done · 커밋 3ab61ed
-- [x] M-16 프로필 일괄 조회 (ADMIN) · 상태 done · 커밋 -
+- [x] M-16 프로필 일괄 조회 (ADMIN) · 상태 done · 커밋 bf499f7
+- [x] M-17 프로필 등록·닉네임 변경의 UNIQUE 충돌이 남기는 Hibernate ERROR 를 버린다 · 상태 done · 커밋 - · 리뷰 1라운드
 
 ## 선행 조건
 
